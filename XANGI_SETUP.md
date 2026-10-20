@@ -1,10 +1,19 @@
-# Managed Extensionセットアップ
+# xangi-stopwatchのセットアップ詳細
 
-1. このリポジトリで `uv sync --locked --no-dev` を実行します。
-2. `~/.xangi/xangi-stopwatch/config.json` に接続設定を作ります。
-3. xangiの拡張管理画面から、このcheckoutの `xangi-extension.json` を登録して起動します。
-4. `/api/health` の `connected` がtrueになることを確認します。
-5. 共通音声サービスを起動し、StopWatch設定画面でAgent・声・顔を選び、設定を保存します。
+初めて導入する方は、[READMEの「はじめに」](README.md#はじめに)から進めてください。[xangi本体](https://github.com/karaage0703/xangi)のセットアップ後、Web UIの「拡張」→「xangi-stopwatch」→「追加」で専用のセットアップ会話が開きます。
+
+この文書は、その会話を担当するAIと手動導入する方向けの詳細手順です。通常の利用者が、先にリポジトリをcloneしたり以下のコマンドを手作業で実行したりする必要はありません。xangi本体の導入手順は[xangiのQuickstart](https://github.com/karaage0703/xangi#quickstart)を参照してください。
+
+## セットアップの進め方
+
+1. xangi本体とAIバックエンドが利用できることを確認します。接続方式（初回はUSB推奨）、StopWatchを接続するホスト、音声サービスの有無を確認します。
+2. xangiが取得したこのリポジトリで `uv sync --locked --no-dev` を実行します。手動導入の場合は、先にこのリポジトリを取得します。
+3. [ファームウェアの手順](firmware/README.md)に従い、選んだ接続方式のファームを準備します。書き込み先と、既存アプリが置き換わることを利用者へ説明し、確認してから書き込みます。
+4. `~/.xangi/xangi-stopwatch/config.json` に、以下のUSBまたはTailnetの接続設定を作ります。既存設定がある場合は内容を確認して必要な項目だけ変更します。
+5. xangiの拡張管理から、このcheckoutの `xangi-extension.json` を登録して起動します。登録済みの場合は重複登録せず、設定の反映に必要な操作を行います。操作方法は利用中のxangiのヘルプで確認します。
+6. xangi経由で拡張の `/api/health` を確認し、`connected` がtrueになることを確認します。未設定・未接続のままセットアップ完了とはしません。
+7. 以下の[共通音声サービス](#共通音声サービス)と[会話設定](#本体マイクで単独会話)を準備します。既存サービスがあれば設定と稼働状態を確認して利用します。
+8. Web UIの「拡張」→「xangi-stopwatch」→「開く」でAgent・声・顔を選び、設定を保存します。本体のAボタンで録音・送信し、返答が音声で再生されることを利用者と確認します。
 
 音量はxangiのStopWatch拡張画面で変更し、「保存」を押します。初期値25、0で消音です。本体の再起動後も保持されます。
 
@@ -50,7 +59,7 @@ StopWatchはiPhoneのテザリングでインターネットへ接続し、Micro
 }
 ```
 
-`voice_url`は共通音声サービスのURLです（`/stt`・`/tts`）。Agent、言語、声、顔はWatcherのStopWatch画面から保存でき、拡張の再起動は不要です。録音・会話処理中の変更は拒否します。Agent切替や保存後は専用の新しい会話セッションになります。
+`voice_url`は共通音声サービスのURLです（`/stt`・`/tts`）。Agent、言語、声、顔はxangiのStopWatch設定画面から保存でき、拡張の再起動は不要です。録音・会話処理中の変更は拒否します。Agent切替や保存後は専用の新しい会話セッションになります。
 
 
 ### 共通音声サービス

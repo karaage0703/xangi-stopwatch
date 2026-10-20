@@ -2,7 +2,7 @@
   "schemaVersion": 2,
   "id": "xangi-stopwatch",
   "displayName": "xangi-stopwatch",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "StopWatchの本体マイク会話・Agent設定・顔表示",
   "permissions": [
     "指定USBシリアルまたはTailnet上のStopWatchへ接続"

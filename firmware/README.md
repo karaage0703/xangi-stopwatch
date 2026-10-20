@@ -1,5 +1,7 @@
 # StopWatch Avatar受信ファーム
 
+この文書は、[xangi-stopwatchのセットアップ](../README.md#はじめに)で使うファームのビルド・書き込み手順です。通常はxangiのWeb UIの「拡張」からxangi-stopwatchを追加し、専用のセットアップ会話で案内を受けて進めます。ホスト側の準備は[セットアップ詳細](../XANGI_SETUP.md)を参照してください。
+
 StopWatchのセッション一覧ファームを置き換えます。書込み先がStopWatchであることを確認してください。既存watcherのWi-Fi設定の自動移行はしません。
 
 ```bash
