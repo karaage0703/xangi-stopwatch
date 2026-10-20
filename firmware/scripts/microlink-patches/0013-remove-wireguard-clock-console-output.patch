@@ -1,0 +1,10 @@
+--- a/components/microlink/components/wireguard_lwip/src/wireguard-platform-esp32.c
++++ b/components/microlink/components/wireguard_lwip/src/wireguard-platform-esp32.c
+@@ -14,4 +14,7 @@
+  * Time Functions
+  * ========================================================================== */
++
++/* Never wait on a USB console while generating handshake timestamps. */
++#define printf(...) ((void)0)
+ 
+ uint32_t wireguard_sys_now() {

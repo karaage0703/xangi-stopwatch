@@ -1,0 +1,81 @@
+--- a/components/microlink/src/microlink.c
++++ b/components/microlink/src/microlink.c
+@@ -97,6 +97,7 @@
+     }
+ 
+     if (need_save) {
++        nvs_erase_key(nvs, "vpn_ip");
+         nvs_set_blob(nvs, NVS_KEY_MACHINE_PRI, ml->machine_private_key, 32);
+         nvs_set_blob(nvs, NVS_KEY_MACHINE_PUB, ml->machine_public_key, 32);
+         nvs_set_blob(nvs, NVS_KEY_WG_PRI, ml->wg_private_key, 32);
+@@ -106,11 +107,30 @@
+         nvs_commit(nvs);
+         ESP_LOGI(TAG, "Keys saved to NVS");
+     } else {
++        uint32_t cached_ip = 0;
++        if (nvs_get_u32(nvs, "vpn_ip", &cached_ip) == ESP_OK &&
++            (cached_ip & 0xffc00000U) == 0x64400000U) {
++            ml->vpn_ip = cached_ip;
++        }
+         ESP_LOGI(TAG, "Keys loaded from NVS");
+     }
+ 
+     nvs_close(nvs);
+     return ESP_OK;
++}
++
++/* Cache only addresses assigned by the authenticated control server. The
++ * address shares the identity namespace and is erased whenever keys change. */
++void ml_cache_vpn_ip(microlink_t *ml, uint32_t ip) {
++    if ((ip & 0xffc00000U) != 0x64400000U) return;
++    ml->vpn_ip = ip;
++    nvs_handle_t nvs;
++    if (nvs_open(NVS_NAMESPACE, NVS_READWRITE, &nvs) != ESP_OK) return;
++    uint32_t old_ip = 0;
++    if (nvs_get_u32(nvs, "vpn_ip", &old_ip) != ESP_OK || old_ip != ip) {
++        if (nvs_set_u32(nvs, "vpn_ip", ip) == ESP_OK) nvs_commit(nvs);
++    }
++    nvs_close(nvs);
+ }
+ 
+ /* ============================================================================
+--- a/components/microlink/include/microlink_internal.h
++++ b/components/microlink/include/microlink_internal.h
+@@ -683,6 +683,8 @@
+     return ptr;
+ }
+ 
++void ml_cache_vpn_ip(microlink_t *ml, uint32_t ip);
++
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/components/microlink/src/ml_coord.c
++++ b/components/microlink/src/ml_coord.c
+@@ -956,7 +956,7 @@
+             if (addr) {
+                 unsigned a, b, c, d;
+                 if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+-                    ml->vpn_ip = (a << 24) | (b << 16) | (c << 8) | d;
++                    ml_cache_vpn_ip(ml, (a << 24) | (b << 16) | (c << 8) | d);
+                     char ip_str[16];
+                     microlink_ip_to_str(ml->vpn_ip, ip_str);
+                     ESP_LOGI(TAG, "Our VPN IP: %s", ip_str);
+@@ -1618,7 +1618,7 @@
+                     if (addr) {
+                         unsigned a, b, c, d;
+                         if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+-                            ml->vpn_ip = (a << 24) | (b << 16) | (c << 8) | d;
++                            ml_cache_vpn_ip(ml, (a << 24) | (b << 16) | (c << 8) | d);
+                             char ip_str[16];
+                             microlink_ip_to_str(ml->vpn_ip, ip_str);
+                             ESP_LOGI(TAG, "Our VPN IP: %s", ip_str);
+@@ -2109,7 +2109,7 @@
+                     if (sscanf(addr, "%u.%u.%u.%u", &a, &b, &c, &d) == 4) {
+                         uint32_t new_ip = (a << 24) | (b << 16) | (c << 8) | d;
+                         if (new_ip != ml->vpn_ip) {
+-                            ml->vpn_ip = new_ip;
++                            ml_cache_vpn_ip(ml, new_ip);
+                             ESP_LOGI(TAG, "VPN IP updated via long-poll");
+                         }
+                     }

@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 2,
+  "id": "xangi-stopwatch",
+  "displayName": "xangi-stopwatch",
+  "version": "0.1.0",
+  "description": "StopWatchの本体マイク会話・Agent設定・顔表示",
+  "permissions": [
+    "指定USBシリアルまたはTailnet上のStopWatchへ接続"
+  ],
+  "entrypoint": ".venv/bin/xangi-stopwatch-extension",
+  "runtime": {
+    "kind": "managed-http"
+  },
+  "setup": {
+    "instructions": "XANGI_SETUP.md"
+  },
+  "ui": {
+    "label": "xangi-stopwatch",
+    "capability": "device.stopwatch",
+    "path": "/"
+  },
+  "capabilities": [
+    {
+      "id": "device.stopwatch",
+      "protocol": "http",
+      "healthPath": "/api/health"
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+--- a/components/microlink/src/ml_coord.c
++++ b/components/microlink/src/ml_coord.c
+@@ -34,6 +34,48 @@
+ #include <string.h>
+ #include <errno.h>
+ 
++/* Keep same-subnet IPv4 endpoints even when they appear after many Docker
++ * interfaces. Scan the whole list; the wire format order is not priority. */
++static void parse_peer_endpoints_for_network(ml_peer_update_t *update,
++        const cJSON *endpoints, uint32_t local_ip, uint32_t mask) {
++    update->endpoint_count = 0;
++    for (int pass = 0; pass < 2; ++pass) {
++        const cJSON *ep;
++        cJSON_ArrayForEach(ep, endpoints) {
++            if (update->endpoint_count >= ML_MAX_ENDPOINTS) return;
++            if (!ep->valuestring) continue;
++            unsigned a, b, c, d, port;
++            char extra;
++            if (sscanf(ep->valuestring, "%u.%u.%u.%u:%u%c",
++                       &a, &b, &c, &d, &port, &extra) != 5 ||
++                a > 255 || b > 255 || c > 255 || d > 255 ||
++                port == 0 || port > 65535) continue;
++            uint32_t ip = (a << 24) | (b << 16) | (c << 8) | d;
++            if (ip == 0) continue;
++            bool local = mask && local_ip && ((ip & mask) == (local_ip & mask));
++            if ((pass == 0) != local) continue;
++            bool duplicate = false;
++            for (int j = 0; j < update->endpoint_count; ++j) {
++                if (update->endpoints[j].ip == ip && update->endpoints[j].port == port)
++                    duplicate = true;
++            }
++            if (duplicate) continue;
++            int i = update->endpoint_count++;
++            update->endpoints[i].ip = ip;
++            update->endpoints[i].port = (uint16_t)port;
++            update->endpoints[i].is_ipv6 = false;
++        }
++    }
++}
++
++static void parse_peer_endpoints(ml_peer_update_t *update, const cJSON *endpoints) {
++    esp_netif_ip_info_t info = {0};
++    esp_netif_t *sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
++    if (sta) esp_netif_get_ip_info(sta, &info);
++    parse_peer_endpoints_for_network(update, endpoints,
++                                    ntohl(info.ip.addr), ntohl(info.netmask.addr));
++}
++
+ static const char *TAG = "ml_coord";
+ 
+ /* Effective control plane host: NVS override or compiled default */
+@@ -1097,23 +1139,7 @@
+         /* Endpoints */
+         cJSON *endpoints = cJSON_GetObjectItem(peer, "Endpoints");
+         if (endpoints) {
+-            int ep_count = 0;
+-            cJSON *ep;
+-            cJSON_ArrayForEach(ep, endpoints) {
+-                if (ep_count >= ML_MAX_ENDPOINTS) break;
+-                if (ep->valuestring) {
+-                    unsigned ea, eb, ec, ed, eport;
+-                    if (sscanf(ep->valuestring, "%u.%u.%u.%u:%u",
+-                               &ea, &eb, &ec, &ed, &eport) == 5) {
+-                        update->endpoints[ep_count].ip =
+-                            (ea << 24) | (eb << 16) | (ec << 8) | ed;
+-                        update->endpoints[ep_count].port = (uint16_t)eport;
+-                        update->endpoints[ep_count].is_ipv6 = false;
+-                        ep_count++;
+-                    }
+-                }
+-            }
+-            update->endpoint_count = ep_count;
++            parse_peer_endpoints(update, endpoints);
+         }
+ 
+         char ip_str[16];
+@@ -1192,23 +1218,7 @@
+                     /* Parse endpoints if present */
+                     cJSON *endpoints = cJSON_GetObjectItem(patch, "Endpoints");
+                     if (endpoints) {
+-                        int ep_count = 0;
+-                        cJSON *ep;
+-                        cJSON_ArrayForEach(ep, endpoints) {
+-                            if (ep_count >= ML_MAX_ENDPOINTS) break;
+-                            if (ep->valuestring) {
+-                                unsigned ea, eb, ec, ed, eport;
+-                                if (sscanf(ep->valuestring, "%u.%u.%u.%u:%u",
+-                                           &ea, &eb, &ec, &ed, &eport) == 5) {
+-                                    update->endpoints[ep_count].ip =
+-                                        (ea << 24) | (eb << 16) | (ec << 8) | ed;
+-                                    update->endpoints[ep_count].port = (uint16_t)eport;
+-                                    update->endpoints[ep_count].is_ipv6 = false;
+-                                    ep_count++;
+-                                }
+-                            }
+-                        }
+-                        update->endpoint_count = ep_count;
++                        parse_peer_endpoints(update, endpoints);
+                     }
+ 
+                     ESP_LOGI(TAG, "  Patch peer: %02x%02x%02x%02x... eps=%d",
+--- a/components/microlink/src/ml_peer_nvs.c
++++ b/components/microlink/src/ml_peer_nvs.c
+@@ -125,7 +125,14 @@
+ 
+     /* Store up to 2 endpoints */
+     int stored = 0;
++    /* A verified direct endpoint is more useful than the first advertised one. */
++    if (peer->has_direct_path && peer->best_ip && peer->best_port) {
++        entry.endpoints[stored].ip = peer->best_ip;
++        entry.endpoints[stored++].port = peer->best_port;
++    }
+     for (int i = 0; i < peer->endpoint_count && stored < 2; i++) {
++        if (stored && entry.endpoints[0].ip == peer->endpoints[i].ip &&
++            entry.endpoints[0].port == peer->endpoints[i].port) continue;
+         if (!peer->endpoints[i].is_ipv6 && peer->endpoints[i].ip != 0) {
+             entry.endpoints[stored].ip = peer->endpoints[i].ip;
+             entry.endpoints[stored].port = peer->endpoints[i].port;
+--- a/components/microlink/src/ml_wg_mgr.c
++++ b/components/microlink/src/ml_wg_mgr.c
+@@ -928,6 +928,7 @@
+         }
+ 
+         ml_peer_t *p = &ml->peers[peer_idx];
++        if (memcmp(p->disco_key, sender_disco_key, 32) != 0) continue;
+         uint64_t rtt_ms = now - pending_probes[i].sent_ms;
+ 
+         ESP_LOGI(TAG, "DISCO PONG from %s: RTT=%llu ms (via %s)",
+@@ -938,10 +939,12 @@
+ 
+         /* If direct reply, update best path */
+         if (!pkt->via_derp && pkt->src_ip != 0) {
++            bool endpoint_changed = p->best_ip != pkt->src_ip || p->best_port != pkt->src_port;
+             p->best_ip = pkt->src_ip;
+             p->best_port = pkt->src_port;
+             p->has_direct_path = true;
+             p->trust_until_ms = now + ML_DISCO_TRUST_DURATION_MS;
++            if (endpoint_changed) ml_peer_nvs_save(p);
+ 
+             /* Update WireGuard endpoint to direct path.
+              * Always update the stored endpoint. Only force a handshake if we

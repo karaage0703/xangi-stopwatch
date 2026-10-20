@@ -1,0 +1,15 @@
+--- a/components/microlink/src/ml_coord.c
++++ b/components/microlink/src/ml_coord.c
+@@ -2283,10 +2283,8 @@
+             /* Signal DERP I/O task to connect (connection now owned by I/O task) */
+             if (!ml->derp.connected) {
+                 xEventGroupSetBits(ml->events, ML_EVT_DERP_CONNECT_REQ);
+-                /* Wait for DERP to connect (up to 15s) before continuing */
+-                ESP_LOGI(TAG, "Waiting for DERP I/O task to connect...");
+-                xEventGroupWaitBits(ml->events, ML_EVT_DERP_CONNECTED,
+-                                    pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
++                /* DERP is optional for direct peers. Keep the control stream
++                 * alive while the I/O task establishes the relay asynchronously. */
+             }
+ 
+             /* Start streaming long-poll for incremental updates */
