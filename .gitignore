@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+firmware/.pio/
+firmware/.deps
+firmware/examples/stopwatch/main/tailnet_secrets.h

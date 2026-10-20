@@ -1,0 +1,2 @@
+# Unified patch context lines intentionally begin with spaces before tabs/blank lines.
+firmware/scripts/microlink-patches/*.patch -whitespace

@@ -1,0 +1,47 @@
+--- a/components/microlink/src/ml_wg_mgr.c
++++ b/components/microlink/src/ml_wg_mgr.c
+@@ -1528,9 +1528,13 @@
+     }
+ 
+     /* Wait for registration OR shutdown before proceeding */
+-    EventBits_t wait_bits = xEventGroupWaitBits(ml->events,
+-                         ML_EVT_COORD_REGISTERED | ML_EVT_SHUTDOWN_REQUEST,
+-                         pdFALSE, pdFALSE, portMAX_DELAY);
++    /* A saved identity/address can authenticate cached peers while coord retries.
++     * Do not signal COORD_REGISTERED: control-plane consumers must still wait. */
++    bool cached_boot = cached > 0 && ml->vpn_ip != 0;
++    EventBits_t wait_bits = cached_boot ? xEventGroupGetBits(ml->events) :
++        xEventGroupWaitBits(ml->events,
++                          ML_EVT_COORD_REGISTERED | ML_EVT_SHUTDOWN_REQUEST,
++                          pdFALSE, pdFALSE, portMAX_DELAY);
+ 
+     if (wait_bits & ML_EVT_SHUTDOWN_REQUEST) {
+         ESP_LOGI(TAG, "Shutdown requested before registration, exiting");
+@@ -1546,6 +1550,27 @@
+     } else {
+         /* Update VPN IP if coord already set it */
+         wg_update_vpn_ip(ml);
++        /* NVS entries have wg_peer_index=-1: materialize them in the new netif.
++         * add_peer retains the allowlist and normal WireGuard key validation. */
++        for (int i = 0; i < cached; ++i) {
++            ml_peer_t *p = &ml->peers[i];
++            if (!p->active) continue;
++            ml_peer_update_t update = {0};
++            update.action = ML_PEER_ADD;
++            update.vpn_ip = p->vpn_ip;
++            memcpy(update.public_key, p->public_key, 32);
++            memcpy(update.disco_key, p->disco_key, 32);
++            memcpy(update.hostname, p->hostname, sizeof(update.hostname));
++            update.derp_region = p->derp_region;
++            update.endpoint_count = p->endpoint_count < ML_MAX_ENDPOINTS ?
++                p->endpoint_count : ML_MAX_ENDPOINTS;
++            for (int j = 0; j < update.endpoint_count; ++j) {
++                update.endpoints[j].ip = p->endpoints[j].ip;
++                update.endpoints[j].port = p->endpoints[j].port;
++                update.endpoints[j].is_ipv6 = p->endpoints[j].is_ipv6;
++            }
++            add_peer(ml, &update);
++        }
+         xEventGroupSetBits(ml->events, ML_EVT_WG_READY);
+     }
+ 

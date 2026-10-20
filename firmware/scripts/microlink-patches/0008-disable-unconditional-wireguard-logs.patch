@@ -1,0 +1,14 @@
+--- a/components/microlink/components/wireguard_lwip/src/wireguardif.c
++++ b/components/microlink/components/wireguard_lwip/src/wireguardif.c
+@@ -53,6 +53,11 @@
+ // Debug logging - disable for production to reduce CPU/thermal load
+ // Set to 0 to disable verbose WireGuard debug output
+ #define WG_DEBUG_LOGGING 0
++
++// Packet processing must not block on an unattended USB console.
++#if !WG_DEBUG_LOGGING
++#define printf(...) ((void)0)
++#endif
+ 
+ #if WG_DEBUG_LOGGING
+ #define WG_DEBUG(...) do { printf(__VA_ARGS__); fflush(stdout); } while(0)
