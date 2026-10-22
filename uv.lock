@@ -1150,7 +1150,7 @@ wheels = [
 
 [[package]]
 name = "xangi-stopwatch"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "pillow", version = "12.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
