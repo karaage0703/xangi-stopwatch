@@ -91,3 +91,7 @@ WiFi利用では上記をTailnet接続設定と組み合わせます。iPhoneは
 既定モデルは`medium`です。`XANGI_WHISPER_DEVICE=auto`はCTranslate2のCUDA対応を確認し、使えない場合はPyTorch CUDA、それも使えなければCPU/int8を選びます。PyTorch経路にはCUDA対応のPyTorchと`openai-whisper`が必要です。既存のGPU環境のPythonで`src/xangi_stopwatch/voice_worker.py`を起動できます。`cuda`を明示するとGPUが使えない場合はエラーになります。モデル読込後の`GET /health`に実際の`whisperBackend`・`whisperDevice`を返します。
 
 接続後のWi-Fi追加・切替は[使い方](docs/usage.md#wi-fiを切り替える)を参照してください。Tailscaleの登録とサーバー接続先は共通です。
+
+## 拡張の更新
+
+公開リポジトリから登録した拡張は「更新を確認」から更新できます。更新準備は `scripts/prepare-update` が`uv sync --locked --no-dev`を実行します。停止・起動・正常性確認・失敗時の復旧はxangi本体が行います。
