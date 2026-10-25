@@ -61,3 +61,11 @@ Tailnet版の`NET_STATUS`は`tailnet_state`（0: idle、1: Wi-Fi待ち、2: 接�
 - 返答待ち・再生中のB: 音声を即座に停止し、`{"event":"conversation_stop"}` を通知。バイナリ受信中は読み切り・破棄後に通知してフレーム境界を保つ。
 - 停止後のWAVは拒否。ホストが古い会話を中断・片付けた後、`MIC_BUTTON:on` で次の会話を許可する。
 - 待機中Bの`character_next`と、録音中Bの録音取消は維持する。
+
+## USB Wi-Fi初回設定（ファーム0.8）
+
+`WIFI_LIST`の`usb_setup: true`が対応の目印です。USB専用の`WIFI_SETUP:<SSID UTF-8 hex>,<password UTF-8 hex>`は、同一SSIDの更新または空き枠への追加と接続先選択を行い、成功応答後に再起動します。Wi-Fi未設定時も利用でき、0番も保存枠として使えます。SSIDは1〜32バイト、passwordは空または8〜63バイト。NULは拒否します。会話中や保存数上限、新規保存失敗時はエラーを返し、資格情報は応答しません。
+
+SSIDとpasswordはNVSの一つの文字列にまとめて保存します。旧形式の保存枠・ビルド時の初期Wi-Fiは、新形式で上書きしていなければ引き続き読みます。新形式の設定を使う場合、旧ファームへ戻すとその設定を読めません。ビルド時の初期設定を引き継ぐ更新では既存の`tailnet_secrets.h`を保持してください。
+
+Tailnet接続中のUSBは`WIFI_LIST`、`WIFI_SETUP`、`WIFI_DELETE`、`NET_STATUS`のみ受け付けます。USBから会話イベントを取り出さず、音声・画面用TCP通信と分離します。`NET_STATUS`の`server_connected`は会話サーバーとのTCP接続状態です。保存成功、Wi-Fi接続成功、サーバー接続成功は別の状態として表示します。

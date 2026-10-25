@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StopWatchのWi-Fi設定</title>
+<style>
+:root{--bg:#f7f6f3;--paper:#fff;--ink:#37352f;--muted:#555;--line:#c5c5c5;--accent:#164d78;--font:system-ui,"Yu Gothic",sans-serif}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font)}main{max-width:560px;margin:24px auto;padding:24px;background:var(--paper)}h1{font-size:24px}h2{font-size:20px;margin-top:28px}p{line-height:1.7}label{display:block;margin-top:16px}input,select,button{font:inherit;min-height:44px;max-width:100%;padding:10px}input,select{width:100%;margin-top:6px;border:1px solid var(--line)}button{margin:12px 8px 0 0;cursor:pointer}button:disabled{cursor:default}button.primary{background:var(--accent);color:var(--paper);border:2px solid var(--accent)}button.primary:disabled{background:var(--line);border-color:var(--line);color:var(--muted)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.hint{color:var(--muted);font-size:14px}#status{border-left:4px solid var(--accent);padding:12px;overflow-wrap:anywhere}fieldset{border:0;padding:0;margin:0}[hidden]{display:none!important}@media(max-width:600px){main{margin:0;padding:20px}}
+</style>
+<main><h1>StopWatchのWi-Fi設定</h1>
+<p>初めての登録も、接続できなくなったときも、この画面で設定できます。</p>
+<p>このPCとStopWatchをデータ通信対応のUSBケーブルでつないでください。</p>
+<button id="connect" class="primary">USBで本体に接続</button><button id="disconnect" hidden>USB接続を終了</button>
+<p id="status" role="status" aria-live="polite">USB接続待ちです。PC版Chrome・Edgeで開いてください。</p>
+<noscript>この画面ではJavaScriptを有効にしてください。</noscript>
+<p id="unsupported" hidden>USB設定を利用できません。PC版Chrome・EdgeでこのHTMLを直接開くか、PC上のxangi-stopwatchソースのフォルダで <code>uv run xangi-stopwatch-wifi</code> を実行して表示されたlocalhostのURLを開いてください。</p>
+<form id="setup"><fieldset id="fields" disabled><h2>接続するWi-Fi</h2>
+<label for="ssid">SSID（必須）</label><input id="ssid" required autocomplete="off" aria-describedby="ssidHint"><p id="ssidHint" class="hint">2.4GHzのみ対応。SSIDは32バイト以内です。</p>
+<label for="password">パスワード</label><input id="password" type="password" autocomplete="new-password" maxlength="63" aria-describedby="passwordHint"><p id="passwordHint" class="hint">認証なしのWi-Fiは空欄。それ以外は8〜63バイト。同じSSIDならパスワードを更新します。</p>
+<button id="save" class="primary">保存して接続する</button>
+<p class="hint">保存すると本体が再起動します。接続に失敗しても、この画面から設定し直せます。パスワードはUSBで本体へ送り、サーバーやブラウザには保存しません。</p>
+<h2>保存したWi-Fi</h2><label for="profiles">接続先を選ぶ</label><select id="profiles"></select><button id="use" type="button">SSIDを入力欄に反映</button><button id="remove" type="button">選択したWi-Fiを削除</button><p class="hint">初期設定・選択中のWi-Fiは削除できません。保存は5件までです。</p>
+<button id="refresh" type="button">接続結果を確認</button>
+</fieldset></form>
+<p class="hint">初回はUSB設定対応のTailnetファームを書き込んでおく必要があります。Tailscale登録キーとサーバー接続先はファーム作成時に設定します。</p></main>
+<script>
+'use strict';
+const $=id=>document.getElementById(id), encoder=new TextEncoder();
+let port=null, reader=null, reading=null, pending=null, busy=false, ready=false, wifi=null;
+const supported=window.isSecureContext && 'serial' in navigator;
+$('connect').disabled=!supported;$('unsupported').hidden=supported;
+if(!supported)$('status').textContent='このブラウザ、またはページの開き方ではUSB設定を利用できません。';
+const hex=value=>Array.from(encoder.encode(value),b=>b.toString(16).padStart(2,'0')).join('');
+const unhex=value=>new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(value.match(/../g)||[],b=>parseInt(b,16)));
+function controls(){
+ $('connect').disabled=!supported||busy||!!port;$('disconnect').hidden=!port;$('disconnect').disabled=busy;
+ $('fields').disabled=!ready||busy;
+ const p=wifi?.profiles.find(p=>p.id===Number($('profiles').value));
+ $('remove').disabled=!p||p.built_in||p.id===wifi.active;$('use').disabled=!p;
+}
+function message(text){$('status').textContent=text;}
+function failPending(error){if(pending){const p=pending;pending=null;clearTimeout(p.timer);p.reject(error);}}
+async function readLoop(current){
+ const decoder=new TextDecoder();let buffer='';reader=current.readable.getReader();const owned=reader;
+ try{for(;;){const {value,done}=await owned.read();if(done)break;buffer+=decoder.decode(value,{stream:true});
+  let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end).trim();buffer=buffer.slice(end+1);
+   let data;try{data=JSON.parse(line);}catch{continue;}
+   if(pending && !data.event && (data.status==='error'||pending.accept(data))){const p=pending;pending=null;clearTimeout(p.timer);if(data.status==='error')p.reject(new Error(deviceError(data.error)));else p.resolve(data);}
+  }if(buffer.length>16384)buffer='';
+ }}catch{ /* Device reset/disconnection is handled below. */ }
+ finally{owned.releaseLock();if(reader===owned)reader=null;ready=false;failPending(new Error('USBが切断されました。再起動後に「USBで本体に接続」を押してください。'));controls();}
+}
+function deviceError(code){return ({'device busy':'会話を終了してから設定してください。','Wi-Fi list full':'保存数が5件に達しています。不要なWi-Fiを削除してください。','Wi-Fi save failed':'本体への保存に失敗しました。USBで再接続して確認してください。','invalid Wi-Fi credentials':'SSID・パスワードの長さを確認してください。','cannot delete active or built-in Wi-Fi':'初期設定・選択中のWi-Fiは削除できません。'})[code]||'本体が操作を受け付けませんでした。対応ファームと接続状態を確認してください。';}
+async function command(line,accept){
+ if(!port||pending)throw new Error('USBで接続し直してください。');
+ let writer;
+ const response=new Promise((resolve,reject)=>{pending={resolve,reject,accept,timer:setTimeout(()=>failPending(new Error('本体から応答がありません。対応ファーム、USBケーブル、他アプリによるポート使用を確認し、USBで再接続してください。')),6000)};});
+ // Attach rejection handler before writing: disconnect can occur during write.
+ response.catch(()=>{});
+ try{writer=port.writable.getWriter();await writer.write(encoder.encode(line+'\n'));}catch{failPending(new Error('USBへ送信できませんでした。接続し直してください。'));}finally{writer?.releaseLock();}
+ return response;
+}
+async function closePort(){
+ ready=false;failPending(new Error('USB接続を終了しました。'));
+ if(reader)await reader.cancel().catch(()=>{});if(reading)await reading;
+ const current=port;port=null;reading=null;wifi=null;
+ if(current)await current.close().catch(()=>{});controls();
+}
+async function operation(fn){if(busy)return;busy=true;controls();try{await fn();}catch(e){message(e.message);await closePort();}finally{busy=false;controls();}}
+async function load(){
+ const d=await command('WIFI_LIST',d=>Array.isArray(d.profiles));
+ if(!d.usb_setup)throw new Error('このファームはUSB初回設定に対応していません。USB設定対応のTailnetファームへ更新してください。');
+ wifi=d;$('profiles').replaceChildren();
+ for(const p of d.profiles){p.ssid=unhex(p.ssid_hex);const o=document.createElement('option');o.value=p.id;o.textContent=p.ssid+(p.id===d.active?'（選択中）':'');$('profiles').append(o);}
+ $('profiles').value=d.active;ready=true;controls();
+ if(!d.profiles.length)message('Wi-Fi未設定です。SSID・パスワードを入力してください。');else await status();
+}
+async function status(){
+ const d=await command('NET_STATUS',d=>'wifi_status' in d);
+ if(d.server_connected)message('Wi-Fi・サーバーともに接続済みです。USBを外して使えます。');
+ else if(d.has_ip)message('Wi-Fi接続済みです。Tailscale・サーバーへの接続を待っています。「接続結果を確認」で再確認できます。');
+ else message('Wi-Fiにまだ接続できていません。SSID・パスワード・2.4GHzの電波を確認し、必要なら入力し直してください。');
+}
+$('connect').onclick=()=>operation(async()=>{
+ try{port=await navigator.serial.requestPort();await port.open({baudRate:921600});}
+ catch(e){throw new Error(e.name==='NotFoundError'?'USB接続をキャンセルしました。':'USBを開けません。他のシリアルモニターやUSB接続中の拡張を閉じてください。');}
+ reading=readLoop(port);message('本体を確認しています…');await load();
+});
+$('disconnect').onclick=()=>operation(async()=>{await closePort();message('USB接続を終了しました。');});
+$('refresh').onclick=()=>operation(load);
+$('profiles').onchange=controls;
+$('use').onclick=()=>{const p=wifi?.profiles.find(p=>p.id===Number($('profiles').value));if(p){$('ssid').value=p.ssid;$('password').value='';$('password').focus();message('パスワードを入力して「保存して接続する」を押してください。');}};
+$('remove').onclick=()=>operation(async()=>{await command('WIFI_DELETE:'+Number($('profiles').value),d=>d.status==='ok');await load();});
+$('setup').onsubmit=e=>{e.preventDefault();const ssid=$('ssid').value,password=$('password').value;
+ if(!ssid||encoder.encode(ssid).length>32||ssid.includes('\0')||password.includes('\0')||(password.length&&encoder.encode(password).length<8)||encoder.encode(password).length>63){message('SSIDは1〜32バイト、パスワードは8〜63バイト（認証なしは空欄）で入力してください。');return;}
+ operation(async()=>{try{await command('WIFI_SETUP:'+hex(ssid)+','+hex(password),d=>d.status==='ok');await closePort();message('保存しました。本体が再起動します。数秒待って「USBで本体に接続」を押すと接続結果を確認できます。');}finally{$('password').value='';}});
+};
+if(supported)navigator.serial.addEventListener('disconnect',event=>{if((event.port||event.target)===port&&!busy)operation(async()=>{await closePort();message('USBが切断されました。再接続してください。');});});
+window.addEventListener('pagehide',()=>{if(reader)reader.cancel().catch(()=>{});$('password').value='';});
+controls();
+</script></html>

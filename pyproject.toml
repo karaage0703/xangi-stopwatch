@@ -1,6 +1,6 @@
 [project]
 name = "xangi-stopwatch"
-version = "0.1.2"
+version = "0.1.3"
 description = "StopWatch standalone voice conversations"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -10,6 +10,7 @@ dependencies = ["pillow>=11.0", "pyserial>=3.5"]
 voice = ["faster-whisper==1.2.1", "av<19"]
 
 [project.scripts]
+xangi-stopwatch-wifi = "xangi_stopwatch.usb_wifi:main"
 xangi-stopwatch-extension = "xangi_stopwatch.extension:main"
 
 [dependency-groups]

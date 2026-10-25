@@ -10,13 +10,13 @@ firmware/scripts/setup_microlink.sh
 pio run -d firmware -e stopwatch-main-tailnet
 ```
 
-Tailnet版は `examples/stopwatch/main/tailnet_secrets.example.h` を同じ場所の `tailnet_secrets.h` にコピーし、Wi-Fi・StopWatch用Tailscale登録キー・ホストのTailnet IP・ポート18766を設定します。秘密ファイルはGit対象外です。別端末のNVSや登録済み秘密鍵は流用しません。サンプル値では接続できません。
+Tailnet版は `examples/stopwatch/main/tailnet_secrets.example.h` を同じ場所の `tailnet_secrets.h` にコピーし、StopWatch用Tailscale登録キー・ホストのTailnet IP・ポート18766を設定します。Wi-FiのSSID・パスワードは空欄のままビルドでき、書込み後に[USB設定画面](../docs/usage.md#初回設定と接続の復旧usb)で登録します。従来のWi-Fi埋込み設定も引き続き読み込めます。秘密ファイルはGit対象外です。別端末のNVSや登録済み秘密鍵は流用しません。サンプル値では接続できません。
 
 ```bash
 pio run -d firmware -e stopwatch-main-tailnet -t upload --upload-port <StopWatchのポート>
 ```
 
-USB専用運用は `stopwatch-main` を書き込みます。Tailnet接続中はUSBからの出力を受け付けません。Aで録音・送信、録音中のBで取消、それ以外のBでキャラを切り替えます。円形画面の四隅は見えません。
+USB専用運用は `stopwatch-main` を書き込みます。Tailnet接続中もUSBのWi-Fi設定・状態確認は利用できます。映像・音声など他のUSB操作は受け付けません。Aで録音・送信、録音中のBで取消、それ以外のBでキャラを切り替えます。円形画面の四隅は見えません。
 
 pioarduino 55.03.36 / Arduino 3.3.6、M5Unified 0.2.21、M5GFX 0.2.28に固定。MicroLinkはsetupスクリプトで固定commitへcheckoutし、同梱パッチを適用します。
 

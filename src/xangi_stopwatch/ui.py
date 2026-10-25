@@ -22,6 +22,7 @@ fieldset{margin-top:18px;border:1px solid #aaa;padding:12px}fieldset label{margi
 
 </style><nav class="xangi-host-nav" id="xangiHostNav" aria-label="xangi共通ナビゲーション" hidden><a class="xangi-home-button" id="xangiHomeLink" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>xangiホーム</span></a></nav><main><h1>xangi-stopwatch</h1>
 <p>本体のボタンで会話します。設定はxangi-stopwatch専用に保存されます。</p>
+<p><a href="#wifi">初回のWi-Fi設定・接続の復旧</a></p>
 <section aria-label="会話の表示"><h2>会話</h2><p id="conversationState" role="status">接続を確認しています…</p><p class="hint">自分の認識結果</p><div id="transcript" class="bubble user">まだ会話がありません</div><p class="hint">返答</p><div id="reply" class="bubble assistant">ここに返答が表示されます</div></section>
 <form id="conversation"><h2>キャラ設定</h2>
 <p class="hint">① キャラを選ぶ → ② そのキャラのAgent・声・顔を変更 → ③「このキャラを保存」。別のキャラを作るときは「複製して追加」を押します。</p>
@@ -60,14 +61,19 @@ fieldset{margin-top:18px;border:1px solid #aaa;padding:12px}fieldset label{margi
 <label><input type="checkbox" value="codex"> Codex</label><label><input type="checkbox" value="claude-code"> Claude Code</label><label><input type="checkbox" value="github-copilot"> GitHub Copilot</label><label><input type="checkbox" value="antigravity"> Antigravity</label></fieldset>
 <p class="hint">表示対象だけを変更します。会話に使うバックエンドは変わりません。黄色の線はモニターと同じ時間経過の目安です。複数選択ではチェックしたバックエンドを表示します。水面表示は上下スワイプで選択したバックエンドの各利用枠を切り替えます。目安の計算に必要な期間が取得できない場合は「未取得」と表示します。</p>
 <p id="usageCurrent" role="status"></p><button id="saveDashboard" disabled>利用量の表示を保存</button><p id="dashboardStatus" role="status" aria-live="polite"></p></form>
-<section aria-label="Wi-Fi設定"><h2>Wi-Fi</h2>
+<section id="wifi" aria-label="Wi-Fi設定"><h2>Wi-Fiを設定</h2>
+<p>初回登録・接続できないときは、USBで設定できます。</p>
+<p><a href="api/wifi-setup" download="stopwatch-wifi.html">USB設定画面をダウンロード</a></p>
+<p class="hint">ダウンロードしたHTMLをPC版Chrome・Edgeで開き、このPCと本体をUSB接続してください。サーバーが別のPCでも設定できます。USB設定対応のTailnetファームが必要です。</p>
+<h3>接続中の本体にWi-Fiを追加</h3>
 <p><strong>2.4GHzのみ対応（5GHzのWi-Fiには接続できません）。</strong></p>
 <p class="hint">iPhoneのテザリングは「設定 → インターネット共有 → 互換性を優先」をONにしてください。携帯回線の5Gは利用できます。</p>
 <p class="hint">テザリングも普段のWi-Fiも、同じTailscaleで接続します。切替先につながらなくても元のWi-Fiには戻りません。</p>
-<p id="networkStatus" role="status">接続を確認しています…</p>
+<p id="networkStatus" role="status">本体からWi-Fi一覧を読み込んでいます…</p>
 <label for="wifiProfile">保存したWi-Fi</label><select id="wifiProfile" disabled></select>
 <button id="selectWifi" type="button" disabled>このWi-Fiに切り替える</button><button id="deleteWifi" type="button" disabled>削除</button>
-<button id="refreshWifi" type="button">接続を確認</button>
+<button id="refreshWifi" type="button">再読み込み</button>
+<p class="hint">本体から保存済みWi-Fi一覧を取得し直します。入力したWi-Fiへの接続テストは行いません。</p>
 <form id="wifiForm"><label for="wifiSSID">追加するSSID（2.4GHz）</label><input id="wifiSSID" required autocomplete="off">
 <label for="wifiPassword">Wi-Fiパスワード</label><input id="wifiPassword" type="password" autocomplete="new-password" maxlength="63">
 <p class="hint">認証なしのWi-Fiは空欄。パスワードは本体に保存し、画面へ読み戻しません。追加しただけでは接続先は変わりません。初期Wi-Fiを含め5件まで保存できます。</p>
@@ -83,11 +89,11 @@ $('usageBackend').onchange=$('usageMode').onchange;
 $('dashboardForm').onsubmit=async e=>{e.preventDefault();$('saveDashboard').disabled=true;try{await request('display',{mode:$('usageMode').value,backend:$('usageBackend').value,backends:[...$('usageBackends').querySelectorAll('input:checked')].map(box=>box.value)});$('dashboardStatus').textContent='表示設定を保存しました。本体の次回更新で反映します。';}catch(e){$('dashboardStatus').textContent=e.message;}finally{$('saveDashboard').disabled=false;}};
 let wifiData=null;
 function wifiButtons(){const profile=wifiData?.profiles.find(p=>p.id===Number($('wifiProfile').value));$('selectWifi').disabled=!profile;$('deleteWifi').disabled=!profile||profile.built_in||profile.id===wifiData.active;}
-async function loadWifi(){try{wifiData=await request('network');$('wifiProfile').replaceChildren();for(const p of wifiData.profiles)option($('wifiProfile'),p.id,p.ssid+(p.id===wifiData.active?'（接続先）':''));$('wifiProfile').value=wifiData.active;$('wifiProfile').disabled=false;$('addWifi').disabled=wifiData.profiles.length>=5;wifiButtons();$('networkStatus').textContent='Wi-Fiを選択できます。';}catch(e){$('wifiProfile').disabled=true;$('selectWifi').disabled=true;$('deleteWifi').disabled=true;$('addWifi').disabled=true;$('networkStatus').textContent=e.message;}}
+async function loadWifi(){try{wifiData=await request('network');$('wifiProfile').replaceChildren();for(const p of wifiData.profiles)option($('wifiProfile'),p.id,p.ssid+(p.id===wifiData.active?'（接続先）':''));$('wifiProfile').value=wifiData.active;$('wifiProfile').disabled=false;$('addWifi').disabled=wifiData.profiles.length>=5;wifiButtons();$('networkStatus').textContent=wifiData.profiles.length>=5?'保存数が5件に達しています。不要なWi-Fiを削除してから追加してください。':'本体に接続済みです。Wi-Fiを追加・切替できます。';}catch(e){$('wifiProfile').disabled=true;$('selectWifi').disabled=true;$('deleteWifi').disabled=true;$('addWifi').disabled=true;$('networkStatus').textContent=e.message+' 初回設定・接続の復旧は上のUSB設定画面を使ってください。接続済みなら「再読み込み」で一覧を取得し直せます。';}}
 $('wifiProfile').onchange=wifiButtons;$('refreshWifi').onclick=loadWifi;
 $('wifiForm').onsubmit=async e=>{e.preventDefault();$('addWifi').disabled=true;try{await request('network',{action:'add',ssid:$('wifiSSID').value,password:$('wifiPassword').value});$('wifiPassword').value='';$('wifiSSID').value='';await loadWifi();$('networkStatus').textContent='Wi-Fiを追加しました。選択して切り替えられます。';}catch(e){$('wifiPassword').value='';$('networkStatus').textContent=e.message;$('addWifi').disabled=false;}};
 $('deleteWifi').onclick=async()=>{try{await request('network',{action:'delete',id:Number($('wifiProfile').value)});await loadWifi();}catch(e){$('networkStatus').textContent=e.message;}};
-$('selectWifi').onclick=async()=>{if(!confirm('本体を再起動してWi-Fiを切り替えます。接続に失敗しても元に戻りません。続けますか？'))return;$('selectWifi').disabled=true;try{await request('network',{action:'select',id:Number($('wifiProfile').value)});$('networkStatus').textContent='切替を受け付けました。再接続後に「接続を確認」を押してください。接続できない場合はUSBで設定し直してください。';$('wifiProfile').disabled=true;$('deleteWifi').disabled=true;$('addWifi').disabled=true;}catch(e){$('networkStatus').textContent=e.message;$('selectWifi').disabled=false;}};
+$('selectWifi').onclick=async()=>{if(!confirm('本体を再起動してWi-Fiを切り替えます。接続に失敗しても元に戻りません。続けますか？'))return;$('selectWifi').disabled=true;try{await request('network',{action:'select',id:Number($('wifiProfile').value)});$('networkStatus').textContent='切替を受け付けました。再接続後に「再読み込み」を押してください。接続できない場合はUSBで設定し直してください。';$('wifiProfile').disabled=true;$('deleteWifi').disabled=true;$('addWifi').disabled=true;}catch(e){$('networkStatus').textContent=e.message;$('selectWifi').disabled=false;}};
 loadWifi();
 $('provider').onchange=()=>{$('speaker').disabled=$('provider').value!=='voicevox';};
 async function checkImages(){try{const d=await request('preview',{agent_id:$('agent').value,image_closed:$('imageClosed').value,image_open:$('imageOpen').value});for(const name of ['Closed','Open']){$('preview'+name).src='data:image/jpeg;base64,'+d[name.toLowerCase()];$('preview'+name).hidden=false;}$('imageStatus').textContent=d.fallback?'指定画像を読み込めないため、両方とも標準のxangiアバターを表示しています。':'指定した両方の画像を読み込めました。';}catch(e){$('previewClosed').hidden=true;$('previewOpen').hidden=true;$('imageStatus').textContent=e.message;}}

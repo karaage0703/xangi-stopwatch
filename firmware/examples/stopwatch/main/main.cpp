@@ -292,8 +292,6 @@ bool receive(Channel& io, uint8_t* data, size_t size) {
 constexpr int WIFI_PROFILE_COUNT = 5;
 uint32_t wifiRestartAt = 0;
 String wifiKey(int slot, const char* suffix) { return "w" + String(slot) + suffix; }
-String wifiSSID(int slot) { return slot == 0 ? String(XANGI_TAILNET_WIFI_SSID) : (settings.isKey(wifiKey(slot, "s").c_str()) ? settings.getString(wifiKey(slot, "s").c_str(), "") : String()); }
-String wifiPassword(int slot) { return slot == 0 ? String(XANGI_TAILNET_WIFI_PASSWORD) : (settings.isKey(wifiKey(slot, "p").c_str()) ? settings.getString(wifiKey(slot, "p").c_str(), "") : String()); }
 String hexString(const String& value) {
   const char* digits = "0123456789abcdef"; String result;
   for (size_t i = 0; i < value.length(); ++i) { uint8_t c = value[i]; result += digits[c >> 4]; result += digits[c & 15]; }
@@ -309,17 +307,53 @@ bool unhex(const String& value, String& result) {
   }
   return true;
 }
+bool wifiBuiltIn(int slot) { return slot == 0 && XANGI_TAILNET_WIFI_SSID[0]; }
+String wifiCredential(int slot, bool password) {
+  String key = wifiKey(slot, "c");
+  if (settings.isKey(key.c_str())) {
+    String value = settings.getString(key.c_str(), ""), decoded;
+    int comma = value.indexOf(',');
+    if (comma >= 0) unhex(password ? value.substring(comma + 1) : value.substring(0, comma), decoded);
+    return decoded;
+  }
+  if (slot == 0 && !settings.isKey(wifiKey(slot, "s").c_str())) return String(password ? XANGI_TAILNET_WIFI_PASSWORD : XANGI_TAILNET_WIFI_SSID);
+  return settings.getString(wifiKey(slot, password ? "p" : "s").c_str(), "");
+}
+String wifiSSID(int slot) { return wifiCredential(slot, false); }
+String wifiPassword(int slot) { return wifiCredential(slot, true); }
+
 #endif
 bool command(Channel& io, const String& line) {
 #ifdef XANGI_STOPWATCH_TAILNET
+  if (line.startsWith("WIFI_SETUP:")) {
+    Lock lock;
+    if (io.net) return io.line("{\"status\":\"error\",\"error\":\"USB required\"}");
+    if (conversationBusy || micRecording || micReady || micStart || playing || !audio.empty())
+      return io.line("{\"status\":\"error\",\"error\":\"device busy\"}");
+    int comma = line.indexOf(',', 11); String ssid, password;
+    if (comma < 0 || !unhex(line.substring(11, comma), ssid) || !unhex(line.substring(comma + 1), password) || ssid.isEmpty() || ssid.length() > 32 || password.length() > 63 || (password.length() > 0 && password.length() < 8))
+      return io.line("{\"status\":\"error\",\"error\":\"invalid Wi-Fi credentials\"}");
+    int slot = -1;
+    for (int i = 0; i < WIFI_PROFILE_COUNT; ++i) {
+      String saved = wifiSSID(i);
+      if (saved == ssid) { slot = i; break; }
+      if (saved.isEmpty() && slot < 0) slot = i;
+    }
+    if (slot < 0) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi list full\"}");
+    // One NVS string commits SSID and password together; legacy slots remain readable.
+    if (!settings.putString(wifiKey(slot, "c").c_str(), line.substring(11)) || !settings.putUChar("wifiSlot", slot))
+      return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi save failed\"}");
+    wifiRestartAt = millis() + 1500;
+    return io.line("{\"status\":\"ok\"}");
+  }
   if (line == "WIFI_LIST") {
     Lock lock;
-    String result = "{\"status\":\"ok\",\"active\":" + String(settings.getUChar("wifiSlot", 0)) + ",\"profiles\":[";
+    String result = "{\"status\":\"ok\",\"usb_setup\":true,\"active\":" + String(settings.getUChar("wifiSlot", 0)) + ",\"profiles\":[";
     bool comma = false;
     for (int i = 0; i < WIFI_PROFILE_COUNT; ++i) {
       String ssid = wifiSSID(i); if (ssid.isEmpty()) continue;
       if (comma) result += ","; comma = true;
-      result += "{\"id\":" + String(i) + ",\"ssid_hex\":\"" + hexString(ssid) + "\",\"built_in\":" + (i == 0 ? "true" : "false") + "}";
+      result += "{\"id\":" + String(i) + ",\"ssid_hex\":\"" + hexString(ssid) + "\",\"built_in\":" + (wifiBuiltIn(i) ? "true" : "false") + "}";
     }
     return io.line(result + "]}");
   }
@@ -337,7 +371,7 @@ bool command(Channel& io, const String& line) {
       if (i != slot && wifiSSID(i) == ssid)
         return io.line("{\"status\":\"error\",\"error\":\"SSID already saved\"}");
     }
-    if (settings.putString(wifiKey(slot, "s").c_str(), ssid) == 0)
+    if (settings.putString(wifiKey(slot, "c").c_str(), hexString(ssid) + "," + hexString(wifiPassword(slot))) == 0)
       return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi save failed\"}");
     return io.line("{\"status\":\"ok\"}");
   }
@@ -350,7 +384,7 @@ bool command(Channel& io, const String& line) {
     for (int i = 0; i < WIFI_PROFILE_COUNT; ++i) {
       String saved = wifiSSID(i);
       if (saved == ssid) return io.line("{\"status\":\"error\",\"error\":\"SSID already saved\"}");
-      if (i > 0 && saved.isEmpty() && freeSlot < 0) freeSlot = i;
+      if (saved.isEmpty() && freeSlot < 0) freeSlot = i;
     }
     if (freeSlot < 0) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi list full\"}");
     // Password first; the SSID makes a complete profile visible.
@@ -369,8 +403,9 @@ bool command(Channel& io, const String& line) {
     int slot = value[0] - '0';
     if (wifiSSID(slot).isEmpty()) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi not found\"}");
     if (line.startsWith("WIFI_DELETE:")) {
-      if (slot == 0 || slot == settings.getUChar("wifiSlot", 0)) return io.line("{\"status\":\"error\",\"error\":\"cannot delete active or built-in Wi-Fi\"}");
-      if (!settings.remove(wifiKey(slot, "s").c_str())) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi delete failed\"}");
+      if (wifiBuiltIn(slot) || slot == settings.getUChar("wifiSlot", 0)) return io.line("{\"status\":\"error\",\"error\":\"cannot delete active or built-in Wi-Fi\"}");
+      if (!settings.remove(wifiKey(slot, settings.isKey(wifiKey(slot, "c").c_str()) ? "c" : "s").c_str())) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi delete failed\"}");
+      settings.remove(wifiKey(slot, "s").c_str());
       settings.remove(wifiKey(slot, "p").c_str());
     } else {
       if (micRecording || micReady || micStart || playing || !audio.empty()) return io.line("{\"status\":\"error\",\"error\":\"device busy\"}");
@@ -457,12 +492,12 @@ bool command(Channel& io, const String& line) {
 
 #ifdef XANGI_STOPWATCH_TAILNET
   if (line == "NET_STATUS") {
-    return io.line(String("{\"wifi_status\":") + int(WiFi.status()) + ",\"has_ip\":" + (WiFi.localIP() != IPAddress(0,0,0,0) ? "true" : "false") + ",\"clock_ready\":" + (time(nullptr) >= 1700000000 ? "true" : "false") + ",\"tailnet_state\":" + int(microlink_get_state(networkClient)) + ",\"peer_count\":" + microlink_get_peer_count(networkClient) + ",\"tcp_attempts\":" + networkAttempts + "}");
+    return io.line(String("{\"wifi_status\":") + int(WiFi.status()) + ",\"has_ip\":" + (WiFi.localIP() != IPAddress(0,0,0,0) ? "true" : "false") + ",\"clock_ready\":" + (time(nullptr) >= 1700000000 ? "true" : "false") + ",\"tailnet_state\":" + (networkClient ? int(microlink_get_state(networkClient)) : 0) + ",\"peer_count\":" + (networkClient ? microlink_get_peer_count(networkClient) : 0) + ",\"server_connected\":" + (networkActive ? "true" : "false") + ",\"tcp_attempts\":" + networkAttempts + "}");
   }
 #endif
   if (line == "STATUS") {
     Lock lock;
-    return io.line(String("{\"state\":\"ready\",\"version\":\"stopwatch-voice-0.7\",\"device\":\"stopwatch\",\"dashboard\":true,\"display_width\":466,\"display_height\":466,\"servo\":false,\"camera\":false,\"puzzle\":false,\"stack_led\":false,\"mic_button\":false,\"head_touch_avatar\":false,\"head_pet_sound\":false,\"caption\":true,\"caption_index\":true,\"mic_base64\":true,\"microphone\":true,\"character_button\":true,\"conversation_stop\":true,\"mic_read_max\":16384,\"playing\":") + (playing ? "true" : "false") + ",\"queued\":" + audio.size() + ",\"volume\":" + volume + ",\"battery_position\":\"" + batteryPosition + "\",\"text_visible\":" + (textVisible ? "true" : "false") + ",\"battery_percent\":" + batteryPercent + ",\"battery_charging\":" + (batteryCharging ? "true" : "false") + ",\"mic_recording\":" + (micRecording ? "true" : "false") + ",\"mic_ready\":" + (micReady ? "true" : "false") + ",\"mic_id\":" + micId + ",\"mic_bytes\":" + micCount * 2 + "}");
+    return io.line(String("{\"state\":\"ready\",\"version\":\"stopwatch-voice-0.8\",\"device\":\"stopwatch\",\"dashboard\":true,\"display_width\":466,\"display_height\":466,\"servo\":false,\"camera\":false,\"puzzle\":false,\"stack_led\":false,\"mic_button\":false,\"head_touch_avatar\":false,\"head_pet_sound\":false,\"caption\":true,\"caption_index\":true,\"mic_base64\":true,\"microphone\":true,\"character_button\":true,\"conversation_stop\":true,\"mic_read_max\":16384,\"playing\":") + (playing ? "true" : "false") + ",\"queued\":" + audio.size() + ",\"volume\":" + volume + ",\"battery_position\":\"" + batteryPosition + "\",\"text_visible\":" + (textVisible ? "true" : "false") + ",\"battery_percent\":" + batteryPercent + ",\"battery_charging\":" + (batteryCharging ? "true" : "false") + ",\"mic_recording\":" + (micRecording ? "true" : "false") + ",\"mic_ready\":" + (micReady ? "true" : "false") + ",\"mic_id\":" + micId + ",\"mic_bytes\":" + micCount * 2 + "}");
   }
   if (line.startsWith("DASH:")) {
     long size = line.substring(5).toInt();
@@ -582,7 +617,8 @@ bool readLine(Channel& io, String& line) {
 void networkTask(void*) {
   String ssid, password;
   { Lock lock; int slot = settings.getUChar("wifiSlot", 0); ssid = wifiSSID(slot); password = wifiPassword(slot); }
-  if (ssid.isEmpty() || !XANGI_TAILNET_AUTH_KEY[0] || !XANGI_TAILNET_SERVER[0]) { setBootStage("接続設定がありません"); vTaskDelete(nullptr); return; }
+  if (ssid.isEmpty()) { setBootStage("USBでWi-Fiを設定してください"); vTaskDelete(nullptr); return; }
+  if (!XANGI_TAILNET_AUTH_KEY[0] || !XANGI_TAILNET_SERVER[0]) { setBootStage("接続設定がありません"); vTaskDelete(nullptr); return; }
   setBootStage("Wi-Fiに接続中");
   while (WiFi.status() != WL_CONNECTED) {
     WiFi.disconnect(true, false); vTaskDelay(pdMS_TO_TICKS(250));
@@ -683,7 +719,23 @@ void loop() {
   { Lock lock; if (dashboardView && int32_t(millis() - dashboardNextDraw) >= 0) { drawDashboard(); dashboardNextDraw = millis() + (dashboardView == 1 && !multipleUsage ? 100 : 500); } }
   static Channel usb;
   static String line;
-  if (!networkActive && (Serial.available() || characterNextPending || stopPending) && !readLine(usb, line)) {
+#ifdef XANGI_STOPWATCH_TAILNET
+  // A separate USB parser never consumes microphone/button events destined for TCP.
+  if (networkActive) {
+    while (Serial.available()) {
+      char c = Serial.read();
+      if (c == '\n') {
+        if (line == "WIFI_LIST" || line == "NET_STATUS" || line.startsWith("WIFI_SETUP:") || line.startsWith("WIFI_DELETE:")) command(usb, line);
+        else usb.line("{\"status\":\"error\",\"error\":\"USB Wi-Fi setup only while connected\"}");
+        line = "";
+      } else if (c != '\r') {
+        if (line.length() < 4096) line += c;
+        else line = "!overflow";
+      }
+    }
+  } else
+#endif
+  if ((Serial.available() || characterNextPending || stopPending) && !readLine(usb, line)) {
     line = ""; stopAudio();
   }
   {
