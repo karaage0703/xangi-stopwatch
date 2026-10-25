@@ -17,6 +17,7 @@ from .output import Output
 from .settings import Settings
 from .transport import Transport
 from .ui import SETTINGS_HTML
+from .usb_wifi import setup_html
 
 
 def create_server(
@@ -58,7 +59,18 @@ def create_server(
             )
             if not self.authorized():
                 return
-            if self.path == "/":
+            if self.path == "/api/wifi-setup":
+                body = setup_html()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header(
+                    "Content-Disposition", 'attachment; filename="stopwatch-wifi.html"'
+                )
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path == "/":
                 body = SETTINGS_HTML.encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")

@@ -2,8 +2,9 @@
 
 // Copy this file to tailnet_secrets.h and fill in local credentials.
 // tailnet_secrets.h is gitignored and must never be committed.
-#define XANGI_TAILNET_WIFI_SSID "your-wifi-ssid"
-#define XANGI_TAILNET_WIFI_PASSWORD "your-wifi-password"
+// Leave Wi-Fi empty; register it later in the USB Wi-Fi setup page.
+#define XANGI_TAILNET_WIFI_SSID ""
+#define XANGI_TAILNET_WIFI_PASSWORD ""
 
 // Use a short-lived, reusable=false Tailscale auth key. After the first
 // registration, MicroLink persists machine/WireGuard keys in NVS.
