@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cJSON.h>
 #include "navigation.h"
+#include "rotation.h"
 #include <Preferences.h>
 #include <mbedtls/base64.h>
 #include <freertos/FreeRTOS.h>
@@ -13,12 +14,18 @@
 #include <vector>
 #ifdef XANGI_STOPWATCH_TAILNET
 #include <WiFi.h>
+#include <esp_wifi.h>
+#include "wifi_endpoint.h"
+#include <atomic>
 #include <time.h>
 #include "microlink.h"
 #if __has_include("tailnet_secrets.h")
 #include "tailnet_secrets.h"
 #else
 #include "tailnet_secrets.example.h"
+#endif
+#ifndef XANGI_WIFI_COUNTRY_CODE
+#define XANGI_WIFI_COUNTRY_CODE ""
 #endif
 #endif
 
@@ -53,12 +60,24 @@ volatile bool networkActive = false;
 #ifdef XANGI_STOPWATCH_TAILNET
 microlink_t* networkClient = nullptr;
 volatile uint32_t networkAttempts = 0;
+std::atomic<uint32_t> wifiAttempts{0};
+std::atomic<uint8_t> wifiDisconnectReason{0};
+std::atomic<uint32_t> wifiDisconnectEvents{0}, wifiRadioRestarts{0}, wifiCachedAttempts{0};
+std::atomic<int32_t> wifiScanCount{-3}, wifiScanChannel{0}, wifiScanRssi{-127};
+std::atomic<int32_t> wifiScanHidden{0}, wifiScanChannels{0}, wifiSavedApAuth{-1}, wifiSavedApChannel{0};
+std::atomic<bool> wifiSavedApSeen{false};
+std::atomic<int> wifiCountryError{0};
 #endif
 uint32_t epoch = 0, nextFrame = 0;
 int volume = 25, frameIndex = 0, interval = 0;
 Preferences settings;
 M5Canvas canvas(&M5.Display);
 bool canvasReady = false;
+M5Canvas screenCanvas(&M5.Display);
+bool rotationReady = false;
+ScreenRotation screenRotation;
+float savedScreenAngle = 0;
+uint32_t lastRotationDraw = 0;
 int lastFrame = 0;
 String voiceLabel, captionRole;
 std::vector<String> captionLines;
@@ -70,6 +89,22 @@ uint32_t captionPageMs = 4000;
 std::vector<int> animation;
 struct Lock { Lock() { xSemaphoreTakeRecursive(guard, portMAX_DELAY); }
               ~Lock() { xSemaphoreGiveRecursive(guard); } };
+// Compose every screen upright, then rotate the complete frame once.
+void presentCanvas() {
+  if (screenRotation.active) {
+    canvas.fillRoundRect(123, 175, 220, 48, 12, TFT_BLACK);
+    canvas.setFont(&fonts::lgfxJapanGothic_24);
+    canvas.setTextDatum(middle_center); canvas.setTextColor(TFT_CYAN);
+    canvas.drawString("回転 " + String(screenRotation.angle, 0) + "°", 233, 199);
+  }
+  if (rotationReady && screenRotation.angle != 0) {
+    screenCanvas.fillScreen(TFT_BLACK);
+    canvas.pushRotateZoom(&screenCanvas, 233, 233, screenRotation.angle, 1.0f, 1.0f);
+    screenCanvas.pushSprite(0, 0);
+  } else {
+    canvas.pushSprite(0, 0);
+  }
+}
 #include "dashboard.h"
 void setBootStage(const char* text) { Lock lock; bootStage = text; }
 template<class Display> void drawBattery(Display& display) {
@@ -90,26 +125,30 @@ template<class Display> void drawBattery(Display& display) {
   display.setTextColor(TFT_WHITE);
   display.drawString(batteryPercent < 0 ? "--%" : String(batteryPercent) + "%", x + 87, y + 19);
 }
+template<class Display> void drawBootScreen(Display& display) {
+  display.fillScreen(0x0841);
+  display.setTextDatum(middle_center);
+  display.setTextColor(TFT_WHITE);
+  display.setFont(&fonts::lgfxJapanGothic_40);
+  display.drawString("xangi-stopwatch", 233, 150);
+  display.setFont(&fonts::lgfxJapanGothic_28);
+  display.setTextColor(TFT_CYAN);
+  display.drawString(bootStage, 233, 245);
+  display.setFont(&fonts::lgfxJapanGothic_24);
+  display.setTextColor(TFT_WHITE);
+  display.drawString(String(millis() / 1000) + " 秒経過", 233, 294);
+  drawBattery(display);
+  if (millis() > 30000 && bootStage != "接続設定がありません" && bootStage != "通信の初期化に失敗") {
+    display.drawString("接続に時間がかかっています", 233, 339);
+    display.drawString("自動で再試行します", 233, 372);
+  }
+}
 void showBootScreen() {
   Lock lock;
   if (faceShown || dashboardView || millis() < nextBootDraw) return;
   nextBootDraw = millis() + 1000;
-  M5.Display.fillScreen(0x0841);
-  M5.Display.setTextDatum(middle_center);
-  M5.Display.setTextColor(TFT_WHITE);
-  M5.Display.setFont(&fonts::lgfxJapanGothic_40);
-  M5.Display.drawString("xangi-stopwatch", 233, 150);
-  M5.Display.setFont(&fonts::lgfxJapanGothic_28);
-  M5.Display.setTextColor(TFT_CYAN);
-  M5.Display.drawString(bootStage, 233, 245);
-  M5.Display.setFont(&fonts::lgfxJapanGothic_24);
-  M5.Display.setTextColor(TFT_WHITE);
-  M5.Display.drawString(String(millis() / 1000) + " 秒経過", 233, 294);
-  drawBattery(M5.Display);
-  if (millis() > 30000 && bootStage != "接続設定がありません" && bootStage != "通信の初期化に失敗") {
-    M5.Display.drawString("接続に時間がかかっています", 233, 339);
-    M5.Display.drawString("自動で再試行します", 233, 372);
-  }
+  if (canvasReady) { drawBootScreen(canvas); presentCanvas(); }
+  else drawBootScreen(M5.Display);
 }
 void showFrame(int slot) {
   if (slot >= 0 && slot < 64 && !frames[slot].empty()) {
@@ -139,7 +178,7 @@ void showFrame(int slot) {
           canvas.drawString(captionLines[captionPage * 2 + row], 65, 303 + row * 30);
       }
       drawBattery(canvas);
-      canvas.pushSprite(0, 0);
+      presentCanvas();
     } else {
       M5.Display.drawJpg(data.data(), data.size(), 0, 0, 466, 466, 0, 0, 1.0f, 1.0f, middle_center);
       drawBattery(M5.Display);
@@ -243,16 +282,35 @@ struct Channel {
 void updateButtons() {
   M5.update();
   const auto& touch = M5.Touch.getDetail();
-  if (touch.wasReleased()) {
+  {
     Lock lock;
-    int moved = canvasReady ? navigateDashboard(touch.distanceX(), touch.distanceY(), dashboardView, dashboardPage, dashboardPages()) : 0;
-    if (moved) {
-      if (dashboardView) drawDashboard();
-      else { showFrame(lastFrame); nextBootDraw = 0; }
-    } else if (touch.wasClicked() && std::abs(touch.distanceX()) < 20 && std::abs(touch.distanceY()) < 20 && !dashboardView && faceShown) {
-      textVisible = !textVisible;
-      settings.putBool("textVisible", textVisible);
-      showFrame(lastFrame);
+    bool wasRotating = screenRotation.active;
+    bool consumed = screenRotation.update(touch.isPressed(), touch.x, touch.y, millis(),
+                                         rotationReady);
+    if (consumed) {
+      bool finished = !touch.isPressed();
+      if (finished && savedScreenAngle != screenRotation.angle) {
+        if (settings.putFloat("screenAngle", screenRotation.angle)) savedScreenAngle = screenRotation.angle;
+      }
+      if (finished || !wasRotating || uint32_t(millis() - lastRotationDraw) >= 50) {
+        lastRotationDraw = millis();
+        if (dashboardView) drawDashboard();
+        else if (faceShown) showFrame(lastFrame);
+        else { nextBootDraw = 0; showBootScreen(); }
+      }
+    }
+    if (touch.wasReleased() && !consumed) {
+      int dx = touch.distanceX(), dy = touch.distanceY();
+      ScreenRotation::toDisplayDelta(dx, dy, rotationReady ? screenRotation.angle : 0);
+      int moved = canvasReady ? navigateDashboard(dx, dy, dashboardView, dashboardPage, dashboardPages()) : 0;
+      if (moved) {
+        if (dashboardView) drawDashboard();
+        else { showFrame(lastFrame); nextBootDraw = 0; }
+      } else if (touch.wasClicked() && std::abs(touch.distanceX()) < 20 && std::abs(touch.distanceY()) < 20 && !dashboardView && faceShown) {
+        textVisible = !textVisible;
+        settings.putBool("textVisible", textVisible);
+        showFrame(lastFrame);
+      }
     }
   }
   if (M5.BtnA.wasPressed()) {
@@ -407,6 +465,7 @@ bool command(Channel& io, const String& line) {
       if (!settings.remove(wifiKey(slot, settings.isKey(wifiKey(slot, "c").c_str()) ? "c" : "s").c_str())) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi delete failed\"}");
       settings.remove(wifiKey(slot, "s").c_str());
       settings.remove(wifiKey(slot, "p").c_str());
+      settings.remove("wifiLastAP");
     } else {
       if (micRecording || micReady || micStart || playing || !audio.empty()) return io.line("{\"status\":\"error\",\"error\":\"device busy\"}");
       if (settings.putUChar("wifiSlot", slot) == 0) return io.line("{\"status\":\"error\",\"error\":\"Wi-Fi save failed\"}");
@@ -492,7 +551,9 @@ bool command(Channel& io, const String& line) {
 
 #ifdef XANGI_STOPWATCH_TAILNET
   if (line == "NET_STATUS") {
-    return io.line(String("{\"wifi_status\":") + int(WiFi.status()) + ",\"has_ip\":" + (WiFi.localIP() != IPAddress(0,0,0,0) ? "true" : "false") + ",\"clock_ready\":" + (time(nullptr) >= 1700000000 ? "true" : "false") + ",\"tailnet_state\":" + (networkClient ? int(microlink_get_state(networkClient)) : 0) + ",\"peer_count\":" + (networkClient ? microlink_get_peer_count(networkClient) : 0) + ",\"server_connected\":" + (networkActive ? "true" : "false") + ",\"tcp_attempts\":" + networkAttempts + "}");
+    wifi_country_t country{};
+    bool countryReady = esp_wifi_get_country(&country) == ESP_OK;
+    return io.line(String("{\"wifi_status\":") + int(WiFi.status()) + ",\"has_ip\":" + (WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0,0,0,0) ? "true" : "false") + ",\"clock_ready\":" + (time(nullptr) >= 1700000000 ? "true" : "false") + ",\"tailnet_state\":" + (networkClient ? int(microlink_get_state(networkClient)) : 0) + ",\"peer_count\":" + (networkClient ? microlink_get_peer_count(networkClient) : 0) + ",\"server_connected\":" + (networkActive ? "true" : "false") + ",\"wifi_attempts\":" + wifiAttempts.load() + ",\"wifi_disconnect_reason\":" + int(wifiDisconnectReason.load()) + ",\"wifi_country_error\":" + wifiCountryError.load() + ",\"wifi_country_first\":" + (countryReady ? int(country.schan) : 0) + ",\"wifi_country_channels\":" + (countryReady ? int(country.nchan) : 0) + ",\"wifi_scan_hidden\":" + wifiScanHidden.load() + ",\"wifi_scan_channels\":" + wifiScanChannels.load() + ",\"wifi_saved_ap_seen\":" + (wifiSavedApSeen.load() ? "true" : "false") + ",\"wifi_saved_ap_auth\":" + wifiSavedApAuth.load() + ",\"wifi_saved_ap_channel\":" + wifiSavedApChannel.load() + ",\"wifi_cached_attempts\":" + wifiCachedAttempts.load() + ",\"wifi_radio_restarts\":" + wifiRadioRestarts.load() + ",\"wifi_scan_count\":" + wifiScanCount.load() + ",\"wifi_scan_channel\":" + wifiScanChannel.load() + ",\"wifi_scan_rssi\":" + wifiScanRssi.load() + ",\"tcp_attempts\":" + networkAttempts + "}");
   }
 #endif
   if (line == "STATUS") {
@@ -589,7 +650,17 @@ bool command(Channel& io, const String& line) {
       interval = constrain(requested, 50, 5000); frameIndex = 0; nextFrame = millis();
     }
   }
-  else if (line.startsWith("FACE:")) { interval = 0; M5.Display.fillScreen(TFT_BLACK); M5.Display.setTextDatum(middle_center); M5.Display.setFont(&fonts::lgfxJapanGothic_40); M5.Display.drawString("xangi-stopwatch", 233, 233); }
+  else if (line.startsWith("FACE:")) {
+    interval = 0;
+    if (canvasReady) {
+      canvas.fillScreen(TFT_BLACK); canvas.setTextDatum(middle_center);
+      canvas.setFont(&fonts::lgfxJapanGothic_40); canvas.setTextColor(TFT_WHITE);
+      canvas.drawString("xangi-stopwatch", 233, 233); presentCanvas();
+    } else {
+      M5.Display.fillScreen(TFT_BLACK); M5.Display.setTextDatum(middle_center);
+      M5.Display.setFont(&fonts::lgfxJapanGothic_40); M5.Display.drawString("xangi-stopwatch", 233, 233);
+    }
+  }
   else if (line == "MIC_BUTTON:off" || line == "HEADTOUCH_AVATAR:off" || line == "HEADPET_SOUND:off") {}
   else return io.line("{\"status\":\"error\",\"error\":\"unsupported command\"}");
   return io.line("{\"status\":\"ok\"}");
@@ -614,21 +685,195 @@ bool readLine(Channel& io, String& line) {
   return true;
 }
 #ifdef XANGI_STOPWATCH_TAILNET
+bool wifiReady() {
+  return WiFi.status() == WL_CONNECTED && WiFi.localIP() != IPAddress(0, 0, 0, 0);
+}
+void applyWifiCountry() {
+  if (!XANGI_WIFI_COUNTRY_CODE[0]) return;
+  if (strlen(XANGI_WIFI_COUNTRY_CODE) != 2) {
+    wifiCountryError.store(ESP_ERR_INVALID_ARG);
+    return;
+  }
+  wifi_country_t current{};
+  if (esp_wifi_get_country(&current) == ESP_OK &&
+      memcmp(current.cc, XANGI_WIFI_COUNTRY_CODE, 2) == 0 &&
+      current.policy == WIFI_COUNTRY_POLICY_AUTO) {
+    wifiCountryError.store(ESP_OK);
+    return;
+  }
+  wifiCountryError.store(esp_wifi_set_country_code(XANGI_WIFI_COUNTRY_CODE, true));
+}
+WifiEndpoint loadWifiEndpoint(const String& ssid) {
+  WifiEndpoint saved;
+  Lock lock;
+  if (settings.getBytesLength("wifiLastAP") != sizeof(saved) ||
+      settings.getBytes("wifiLastAP", &saved, sizeof(saved)) != sizeof(saved) ||
+      !saved.matches(ssid.c_str(), ssid.length())) return WifiEndpoint{};
+  return saved;
+}
+void rememberWifiEndpoint(const String& ssid) {
+  if (!wifiReady() || WiFi.SSID() != ssid) return;
+  WifiEndpoint next;
+  if (!next.assign(ssid.c_str(), ssid.length(), WiFi.BSSID(), WiFi.channel())) return;
+  Lock lock;
+  WifiEndpoint previous;
+  if (settings.getBytesLength("wifiLastAP") == sizeof(previous) &&
+      settings.getBytes("wifiLastAP", &previous, sizeof(previous)) == sizeof(previous) &&
+      memcmp(&previous, &next, sizeof(next)) == 0) return;
+  settings.putBytes("wifiLastAP", &next, sizeof(next));
+}
+void scanAndConnectWifi(const String& ssid, const String& password, bool passive) {
+  // Stop outstanding reconnect attempts before scanning; the IDF rejects scans
+  // while connecting. Never turn STA off or erase saved credentials.
+  WiFi.setAutoReconnect(false);
+  WiFi.disconnect(false, false);
+  vTaskDelay(pdMS_TO_TICKS(250));
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setScanTimeout(15000);
+  int count = WiFi.scanNetworks(false, true, passive, passive ? 500 : 300);
+  wifiScanCount.store(count);
+  int best = -1;
+  int32_t bestRssi = -128;
+  WifiEndpoint previous = loadWifiEndpoint(ssid);
+  bool previousValid = previous.matches(ssid.c_str(), ssid.length());
+  int hidden = 0, channels = 0;
+  wifiSavedApSeen.store(false); wifiSavedApAuth.store(-1); wifiSavedApChannel.store(0);
+  for (int i = 0; i < count && i < 256; ++i) {
+    int channel = WiFi.channel(i);
+    if (channel >= 1 && channel <= 14) channels |= 1 << channel;
+    bool unnamed = WiFi.SSID(i).length() == 0;
+    if (unnamed) ++hidden;
+    bool previousAp = previousValid && memcmp(previous.bssid, WiFi.BSSID(i), 6) == 0;
+    if (previousAp) {
+      wifiSavedApSeen.store(true); wifiSavedApAuth.store(WiFi.encryptionType(i));
+      wifiSavedApChannel.store(channel);
+    }
+    // Only trust an unnamed AP when its address was authenticated previously
+    // with this exact selected SSID; do not try arbitrary hidden networks.
+    if ((WiFi.SSID(i) == ssid || (unnamed && previousAp)) && WiFi.RSSI(i) > bestRssi) {
+      best = i;
+      bestRssi = WiFi.RSSI(i);
+    }
+  }
+  wifiScanHidden.store(hidden); wifiScanChannels.store(channels);
+  // A directed probe can discover an AP that did not answer a wildcard probe.
+  if (best < 0 && count >= 0) {
+    WiFi.scanDelete();
+    count = WiFi.scanNetworks(false, true, false, 300, 0, ssid.c_str());
+    for (int i = 0; i < count && i < 256; ++i) {
+      if (WiFi.SSID(i) == ssid && WiFi.RSSI(i) > bestRssi) {
+        best = i;
+        bestRssi = WiFi.RSSI(i);
+      }
+    }
+  }
+  uint8_t bssid[6] = {};
+  int32_t channel = 0;
+  if (best >= 0) {
+    channel = WiFi.channel(best);
+    memcpy(bssid, WiFi.BSSID(best), sizeof(bssid));
+  }
+  wifiScanChannel.store(channel);
+  wifiScanRssi.store(best >= 0 ? bestRssi : -127);
+  WiFi.scanDelete();
+  // The task owns retries; an SDK reconnect must not race the next scan.
+  if (best >= 0) WiFi.begin(ssid.c_str(), password.c_str(), channel, bssid);
+  else WiFi.begin(ssid.c_str(), password.c_str());
+}
+void waitForWifi(const String& ssid, const String& password) {
+  if (wifiReady()) return;
+  WifiEndpoint saved = loadWifiEndpoint(ssid);
+  bool cachedPending = saved.matches(ssid.c_str(), ssid.length());
+  uint32_t retryDelay = 2000;
+  unsigned missingAttempts = 0;
+  while (!wifiReady()) {
+    setBootStage("Wi-Fiに接続中");
+    // Own retries here, including reasons the core does not retry and stalled
+    // DHCP. Preserve the STA/netif once MicroLink has been initialized.
+    // Before VPN initialization only, rebuild a stalled radio without erasing
+    // credentials. MicroLink retains the STA netif once it has been started.
+    if (!networkClient && missingAttempts >= 3) {
+      WiFi.setAutoReconnect(false);
+      WiFi.mode(WIFI_OFF);
+      vTaskDelay(pdMS_TO_TICKS(250));
+      WiFi.mode(WIFI_STA);
+      applyWifiCountry();
+      WiFi.setSleep(false);
+      WiFi.setAutoReconnect(false);
+      WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+      WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+      ++wifiRadioRestarts;
+      missingAttempts = 0;
+    }
+    uint32_t disconnects = wifiDisconnectEvents.load();
+    ++wifiAttempts;
+    bool cached = cachedPending;
+    cachedPending = false;
+    if (cached) {
+      WiFi.setAutoReconnect(false);
+      WiFi.disconnect(false, false);
+      vTaskDelay(pdMS_TO_TICKS(250));
+      WiFi.setScanMethod(WIFI_FAST_SCAN);
+      ++wifiCachedAttempts;
+      WiFi.begin(ssid.c_str(), password.c_str(), saved.channel, saved.bssid);
+    } else {
+      scanAndConnectWifi(ssid, password, (wifiAttempts.load() % 2) == 0);
+    }
+    uint32_t started = millis();
+    bool missing = false;
+    while (!wifiReady() && uint32_t(millis() - started) < 45000) {
+      // Preserve slow association/DHCP, but do not spend 45s on an AP the driver
+      // has already reported missing. A link waiting for DHCP is left alone.
+      if (wifiDisconnectEvents.load() != disconnects &&
+          wifiDisconnectReason.load() == WIFI_REASON_NO_AP_FOUND && !WiFi.STA.connected()) {
+        missing = true;
+        break;
+      }
+      // A stale cached AP must not delay a fresh scan. A link awaiting DHCP
+      // still receives the full connection window.
+      if (cached && uint32_t(millis() - started) >= 8000 && !WiFi.STA.connected()) break;
+      vTaskDelay(pdMS_TO_TICKS(250));
+    }
+    if (wifiReady()) break;
+    if (missing) ++missingAttempts;
+    else missingAttempts = 0;
+    setBootStage("Wi-Fi再試行待ち・USBで確認可");
+    started = millis();
+    while (!wifiReady() && uint32_t(millis() - started) < retryDelay)
+      vTaskDelay(pdMS_TO_TICKS(250));
+    retryDelay = std::min(retryDelay * 2, uint32_t(missing ? 5000 : 30000));
+  }
+  rememberWifiEndpoint(ssid);
+}
 void networkTask(void*) {
   String ssid, password;
   { Lock lock; int slot = settings.getUChar("wifiSlot", 0); ssid = wifiSSID(slot); password = wifiPassword(slot); }
   if (ssid.isEmpty()) { setBootStage("USBでWi-Fiを設定してください"); vTaskDelete(nullptr); return; }
   if (!XANGI_TAILNET_AUTH_KEY[0] || !XANGI_TAILNET_SERVER[0]) { setBootStage("接続設定がありません"); vTaskDelete(nullptr); return; }
-  setBootStage("Wi-Fiに接続中");
-  while (WiFi.status() != WL_CONNECTED) {
-    WiFi.disconnect(true, false); vTaskDelay(pdMS_TO_TICKS(250));
-    WiFi.mode(WIFI_STA); WiFi.setSleep(false); WiFi.setAutoReconnect(true);
-    WiFi.begin(ssid.c_str(), password.c_str());
-    for (int i = 0; i < 80 && WiFi.status() != WL_CONNECTED; ++i) vTaskDelay(pdMS_TO_TICKS(250));
-  }
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    // Ignore our own disconnect before retrying; preserve the AP's last reason.
+    if (info.wifi_sta_disconnected.reason != WIFI_REASON_ASSOC_LEAVE) {
+      wifiDisconnectReason.store(info.wifi_sta_disconnected.reason);
+      ++wifiDisconnectEvents;
+    }
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  // Credentials are already stored in Preferences; retries need not rewrite
+  // the driver's flash configuration on every attempt.
+  WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  applyWifiCountry();
+  WiFi.setSleep(false);
+  WiFi.setAutoReconnect(false);
+  WiFi.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
+  waitForWifi(ssid, password);
   setBootStage("時刻を合わせています");
   configTime(0, 0, "pool.ntp.org", "time.google.com");
-  while (time(nullptr) < 1700000000) vTaskDelay(pdMS_TO_TICKS(250));
+  while (time(nullptr) < 1700000000) {
+    waitForWifi(ssid, password);
+    setBootStage("時刻を合わせています");
+    vTaskDelay(pdMS_TO_TICKS(250));
+  }
   setBootStage("暗号化通信を準備中");
   const microlink_config_t config = {
     .auth_key = XANGI_TAILNET_AUTH_KEY,
@@ -642,7 +887,8 @@ void networkTask(void*) {
   networkClient = ml;
   if (!ml || microlink_start(ml) != ESP_OK) { setBootStage("通信の初期化に失敗"); vTaskDelete(nullptr); return; }
   for (;;) {
-    if (WiFi.status() != WL_CONNECTED || !microlink_get_vpn_ip(ml)) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
+    waitForWifi(ssid, password);
+    if (!microlink_get_vpn_ip(ml)) { vTaskDelay(pdMS_TO_TICKS(1000)); continue; }
     uint32_t ip = microlink_parse_ip(XANGI_TAILNET_SERVER);
     if (!ip) ip = microlink_resolve(ml, XANGI_TAILNET_SERVER);
     if (!ip) { vTaskDelay(pdMS_TO_TICKS(3000)); continue; }
@@ -657,7 +903,7 @@ void networkTask(void*) {
     networkActive = true;
     io.line(String("{\"event\":\"stopwatch_connected\",\"device\":\"") + microlink_default_device_name() + "\",\"protocol\":3}");
     String line;
-    while (microlink_tcp_is_connected(io.socket) && readLine(io, line)) {}
+    while (wifiReady() && microlink_tcp_is_connected(io.socket) && readLine(io, line)) {}
     stopAudio();
     { Lock lock; micCancel = true; micReady = false; micStart = false; micButtons = false; }
     microlink_tcp_close(io.socket);
@@ -680,6 +926,8 @@ void setup() {
   batteryPosition = settings.getString("batteryPos", "right");
   if (batteryPosition != "left" && batteryPosition != "center" && batteryPosition != "hidden") batteryPosition = "right";
   textVisible = settings.getBool("textVisible", true);
+  screenRotation.angle = ScreenRotation::normalize(settings.getFloat("screenAngle", settings.getFloat("avatarAngle", 0)));
+  savedScreenAngle = screenRotation.angle;
   M5.Mic.end();
   auto micConfig = M5.Mic.config();
   micConfig.magnification = 4;
@@ -689,6 +937,10 @@ void setup() {
   canvas.setColorDepth(16);
   canvas.setPsram(true);
   canvasReady = canvas.createSprite(466, 466) != nullptr;
+  screenCanvas.setColorDepth(16);
+  screenCanvas.setPsram(true);
+  rotationReady = canvasReady && screenCanvas.createSprite(466, 466) != nullptr;
+  canvas.setPivot(233, 233);
   guard = xSemaphoreCreateRecursiveMutex();
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setTextDatum(middle_center);

@@ -13,7 +13,7 @@
 <noscript>この画面ではJavaScriptを有効にしてください。</noscript>
 <p id="unsupported" hidden>USB設定を利用できません。PC版Chrome・EdgeでこのHTMLを直接開くか、PC上のxangi-stopwatchソースのフォルダで <code>uv run xangi-stopwatch-wifi</code> を実行して表示されたlocalhostのURLを開いてください。</p>
 <form id="setup"><fieldset id="fields" disabled><h2>接続するWi-Fi</h2>
-<label for="ssid">SSID（必須）</label><input id="ssid" required autocomplete="off" aria-describedby="ssidHint"><p id="ssidHint" class="hint">2.4GHzのみ対応。SSIDは32バイト以内です。</p>
+<label for="ssid">SSID（必須）</label><input id="ssid" required autocomplete="off" aria-describedby="ssidHint"><p id="ssidHint" class="hint">2.4GHzのみ対応。SSIDは32バイト以内です。iPhoneは「互換性を優先」「ほかの人の接続を許可」をONにし、接続するまで「インターネット共有」の設定画面を開いたまま待ってください。</p>
 <label for="password">パスワード</label><input id="password" type="password" autocomplete="new-password" maxlength="63" aria-describedby="passwordHint"><p id="passwordHint" class="hint">認証なしのWi-Fiは空欄。それ以外は8〜63バイト。同じSSIDならパスワードを更新します。</p>
 <button id="save" class="primary">保存して接続する</button>
 <p class="hint">保存すると本体が再起動します。接続に失敗しても、この画面から設定し直せます。パスワードはUSBで本体へ送り、サーバーやブラウザには保存しません。</p>

@@ -155,5 +155,5 @@ void drawDashboard() {
   if (total > shown) footer += " (先頭" + String(shown) + "件)";
   dashboardText(footer, 233, 410, 270, DASH_MUTED);
   for (int i = 0; i < 3; ++i) canvas.fillCircle(213 + i * 20, 439, i == dashboardView ? 4 : 2, i == dashboardView ? DASH_ACCENT : DASH_MUTED);
-  canvas.pushSprite(0, 0);
+  presentCanvas();
 }
