@@ -16,3 +16,6 @@
 // before MagicDNS data has been fully populated.
 #define XANGI_TAILNET_SERVER "100.x.y.z"
 #define XANGI_TAILNET_PORT 18766
+
+// Deployment country (ISO 3166-1 alpha-2, e.g. JP). Empty keeps SDK defaults.
+#define XANGI_WIFI_COUNTRY_CODE ""

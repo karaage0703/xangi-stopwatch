@@ -72,7 +72,7 @@ int main(){
  settings.data["w1s"]="legacy";settings.data["w1p"]="legacy-pass";
  assert(wifiSSID(0)=="old-home"&&wifiPassword(1)=="legacy-pass");
  setup("legacy","new-password");assert(wifiSSID(1)=="legacy"&&wifiPassword(1)=="new-password");
- settings.selected=0;command(usb,"WIFI_DELETE:1");assert(wifiSSID(1).isEmpty());
+ settings.selected=0;settings.data["wifiLastAP"]="cached";command(usb,"WIFI_DELETE:1");assert(wifiSSID(1).isEmpty()&&!settings.isKey("wifiLastAP"));
  setup("old-home","corrected-password");assert(wifiBuiltIn(0)&&wifiPassword(0)=="corrected-password");
  // With no embedded Wi-Fi, the old ADD command can also use slot zero.
  settings.data.clear();XANGI_TAILNET_WIFI_SSID="";command(usb,"WIFI_ADD:686f6d65,3132333435363738");assert(wifiSSID(0)=="home");

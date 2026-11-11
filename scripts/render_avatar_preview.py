@@ -9,6 +9,7 @@ from xangi_stopwatch.faces import default_faces
 
 root = Path(__file__).resolve().parents[1]
 out = root / "dist/dashboard-preview"
+out.mkdir(parents=True, exist_ok=True)
 module = ast.parse((root / "scripts/render_dashboard_preview.py").read_text())
 prefix = next(
     ast.literal_eval(n.value)
@@ -19,13 +20,18 @@ prefix = next(
 source = (root / "firmware/examples/stopwatch/main/main.cpp").read_text()
 battery = source[
     source.index("template<class Display> void drawBattery") : source.index(
-        "void showBootScreen()"
+        "template<class Display> void drawBootScreen"
     )
 ]
 frame = source[
     source.index("void showFrame(int slot)") : source.index("void stopAudio()")
 ]
 
+boot = source[
+    source.index("template<class Display> void drawBootScreen") : source.index(
+        "void showBootScreen()"
+    )
+]
 encoded = default_faces()["closed"]
 methods = r"""
  void drawRoundRect(int x,int y,int w,int h,int r,unsigned c){std::cout<<"<rect x='"<<x<<"' y='"<<y<<"' width='"<<w<<"' height='"<<h<<"' rx='"<<r<<"' fill='none' stroke='"<<color(c)<<"' stroke-width='1'/>\n";}
@@ -34,7 +40,7 @@ methods = r"""
 """.replace("IMAGE_DATA", encoded)
 prefix = prefix.replace(
     " void remove(int n)",
-    " String(size_t n):std::string(std::to_string(n)){} void remove(int n)",
+    " String(size_t n):std::string(std::to_string(n)){} String(float n,int):std::string(std::to_string(int(std::round(n)))){} void remove(int n)",
 )
 prefix = prefix.replace(
     " void pushSprite(int,int){}", methods + " void pushSprite(int,int){}"
@@ -43,7 +49,10 @@ prefix = prefix.replace(
     "lgfxJapanGothic_24=24,", "lgfxJapanGothic_24=24,lgfxJapanGothic_28=28,"
 )
 globals = r"""
-constexpr unsigned TFT_BLACK=0,TFT_GREEN=0x07e0,TFT_YELLOW=0xffe0;
+#include "rotation.h"
+ScreenRotation screenRotation;
+constexpr unsigned TFT_BLACK=0,TFT_CYAN=0x07ff,TFT_GREEN=0x07e0,TFT_YELLOW=0xffe0;
+String bootStage="接続しています";
 String batteryPosition="right",voiceLabel="A: 録音 B: キャラ",captionRole;
 int batteryPercent=85,lastFrame=0,dashboardView=0,captionIndex=0;
 bool batteryCharging=true,faceShown=true,textVisible=true;
@@ -52,15 +61,20 @@ struct Device { Canvas Display; } M5;
 """
 main = r"""
 int main(int argc, char**argv){
- if(argc>1){textVisible=false;captionRole="A";captionLines.push_back("サンプルのセリフ");}
+ if(argc>1 && std::string(argv[1])=="boot"){screenRotation.angle=37;}
+ else if(argc>1 && std::string(argv[1])=="rotated"){screenRotation.angle=37;screenRotation.active=true;captionRole="A";captionLines.push_back("サンプルのセリフ");}
+ else if(argc>1){textVisible=false;captionRole="A";captionLines.push_back("サンプルのセリフ");}
  frames[0].push_back(1);
  std::cout<<"<svg xmlns='http://www.w3.org/2000/svg' width='466' height='466' viewBox='0 0 466 466'><defs><clipPath id='round'><circle cx='233' cy='233' r='233'/></clipPath></defs><g clip-path='url(#round)' font-family='Noto Sans CJK JP,sans-serif'>";
- showFrame(0);std::cout<<"</g></svg>";
+ if(screenRotation.angle)std::cout<<"<g transform='rotate("<<screenRotation.angle<<" 233 233)'>";
+ if(argc>1 && std::string(argv[1])=="boot")drawBootScreen(canvas);else showFrame(0);
+ if(screenRotation.angle)std::cout<<"</g>";
+ std::cout<<"</g></svg>";
 }
 """
 with tempfile.TemporaryDirectory() as temp:
     p = Path(temp)
-    (p / "render.cpp").write_text(prefix + globals + battery + frame + main)
+    (p / "render.cpp").write_text(prefix + globals + battery + boot + frame + main)
     subprocess.run(
         [
             "c++",
@@ -79,4 +93,11 @@ with tempfile.TemporaryDirectory() as temp:
     assert "サンプルのセリフ" in hidden.decode()
     assert "85%" not in hidden.decode() and "A: 録音" not in hidden.decode()
     (out / "avatar-caption-only.svg").write_bytes(hidden)
+    boot_svg = subprocess.check_output([str(p / "render"), "boot"])
+    assert "接続しています" in boot_svg.decode() and "rotate(37" in boot_svg.decode()
+    (out / "boot-rotated.svg").write_bytes(boot_svg)
+    rotated = subprocess.check_output([str(p / "render"), "rotated"])
+    assert "rotate(37 233 233)" in rotated.decode()
+    assert "サンプルのセリフ" in rotated.decode() and "85%" in rotated.decode()
+    (out / "avatar-rotation.svg").write_bytes(rotated)
 print("Generated from actual showFrame/drawBattery; sample battery 85%, charging, idle")

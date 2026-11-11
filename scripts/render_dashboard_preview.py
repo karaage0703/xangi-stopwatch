@@ -52,6 +52,7 @@ struct Canvas {
  void pushSprite(int,int){}
 } canvas;
 bool canvasReady=true;
+void presentCanvas(){};
 """
 suffix = r"""
 int main(int argc,char**argv){
@@ -75,7 +76,10 @@ int main(int argc,char**argv){
  t.name="明日の予定を整理";t.detail="次の入力を待っています";t.state="入力待ち";workingRows.push_back(t);
  workingTotal=3;runningTotal=1;
  std::cout<<"<svg xmlns='http://www.w3.org/2000/svg' width='466' height='466' viewBox='0 0 466 466'><defs><clipPath id='round'><circle cx='233' cy='233' r='233'/></clipPath></defs><g clip-path='url(#round)' font-family='Noto Sans CJK JP,sans-serif'>\n";
- drawDashboard();std::cout<<"</g></svg>";
+ if(argc>3)std::cout<<"<g transform='rotate(37 233 233)'>";
+ drawDashboard();
+ if(argc>3)std::cout<<"</g>";
+ std::cout<<"</g></svg>";
 }
 """
 output = ROOT / "dist/dashboard-preview"
@@ -99,6 +103,8 @@ with tempfile.TemporaryDirectory() as directory:
         ("water", ["1"]),
         ("bars", ["1", "multiple"]),
         ("tasks", ["2"]),
+        ("bars-rotated", ["1", "multiple", "rotated"]),
+        ("tasks-rotated", ["2", "multiple", "rotated"]),
     ]:
         data = subprocess.check_output([str(path / "preview"), *args])
         (output / f"{name}.svg").write_bytes(data)
