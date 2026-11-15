@@ -182,5 +182,3 @@ Copilotなど、取得データに枠の長さがない場合は目安を計算�
 | <img src="images/usage-water.png" width="280" alt="画面全体に水が溜まる使用率と黄色の目安線"> | <img src="images/usage-bars.png" width="280" alt="複数の利用枠を横バー表示。Copilotの目安未取得を明示"> |
 
 <img src="images/tasks.png" width="280" alt="実行中と待機中をまとめたタスク画面">
-
-表示の設計方針は[DESIGN.md](DESIGN.md)を参照してください。
