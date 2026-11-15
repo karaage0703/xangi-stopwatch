@@ -4,7 +4,22 @@ from .constants import MAX_VOLUME
 
 SETTINGS_HTML = """<!doctype html>
 <html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>xangi-stopwatchの設定</title><style>
+<title>xangi-stopwatchの設定</title><script>
+// Same-origin xangi appearance preference; no writes during initialization.
+(() => {
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const preference = () => { try { return localStorage.getItem('xangi-theme'); } catch { return null; } };
+  const apply = () => {
+    const selected = preference();
+    const dark = selected === 'dark' || (selected !== 'light' && media.matches);
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+    document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+  };
+  apply();
+  media.addEventListener('change', apply);
+  window.addEventListener('storage', event => { if (event.key === 'xangi-theme' || event.key === null) apply(); });
+})();
+</script><style>
 *{box-sizing:border-box}body{font-family:"Hiragino Kaku Gothic ProN","Yu Gothic",Meiryo,system-ui,sans-serif;background:#f7f6f3;color:#37352f;margin:0;padding:0}
 main{width:calc(100% - 32px);max-width:560px;margin:24px auto;background:white;padding:24px;border:1px solid #e3e2df;border-radius:12px}
 h1{font-size:24px;overflow-wrap:anywhere}h2{font-size:20px;margin-top:32px}label{display:block;margin-top:18px}
@@ -20,7 +35,14 @@ fieldset{margin-top:18px;border:1px solid #aaa;padding:12px}fieldset label{margi
 .xangi-home-button:active { background: #dce6f2; }
 .xangi-home-button svg { width: 18px; height: 18px; flex-shrink: 0; }
 
-</style><nav class="xangi-host-nav" id="xangiHostNav" aria-label="xangi共通ナビゲーション" hidden><a class="xangi-home-button" id="xangiHomeLink" href="/"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>xangiホーム</span></a></nav><main><h1>xangi-stopwatch</h1>
+
+:root{color-scheme:light;--canvas:#f7f6f3;--surface:#fff;--ink:#37352f;--muted:#686763;--line:#d8d7d4;--accent:#155f9f;--subtle:#f1f0ed;--font:Inter,ui-sans-serif,-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans JP",sans-serif}
+:root[data-theme="dark"]{color-scheme:dark;--canvas:#202020;--surface:#191919;--ink:#efefed;--muted:#aaa9a5;--line:#40403d;--accent:#8dc6f3;--subtle:#2a2a2a}
+body{font-family:var(--font);background:var(--canvas);color:var(--ink)}main{background:var(--surface);border-color:var(--line)}input,select,textarea,button{color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:6px}input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}fieldset{border-color:var(--line)}.hint{color:var(--muted)}.bubble,.bubble.user{background:var(--subtle)}.xangi-host-nav,.xangi-home-button{background:var(--surface);color:var(--ink);border-color:var(--line)}
+
+/* Optional embedded presentation chosen by this extension. */
+:root[data-xangi-embedded="true"] .xangi-host-nav{display:none}
+</style><nav class="xangi-host-nav" id="xangiHostNav" aria-label="xangi共通ナビゲーション" hidden><a class="xangi-home-button" id="xangiHomeLink" href="/" target="_top"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1z"/></svg><span>xangiホーム</span></a></nav><main><h1>xangi-stopwatch</h1>
 <p>本体のボタンで会話します。設定はxangi-stopwatch専用に保存されます。</p>
 <p><a href="#wifi">初回のWi-Fi設定・接続の復旧</a></p>
 <section aria-label="会話の表示"><h2>会話</h2><p id="conversationState" role="status">接続を確認しています…</p><p class="hint">自分の認識結果</p><div id="transcript" class="bubble user">まだ会話がありません</div><p class="hint">返答</p><div id="reply" class="bubble assistant">ここに返答が表示されます</div></section>
