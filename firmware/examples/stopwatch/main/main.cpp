@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Standalone StopWatch voice client.
 #include <M5Unified.h>
+#include <algorithm>
 #include <cmath>
 #include <cJSON.h>
 #include "navigation.h"
@@ -78,6 +79,7 @@ bool rotationReady = false;
 ScreenRotation screenRotation;
 float savedScreenAngle = 0;
 uint32_t lastRotationDraw = 0;
+uint32_t nextMicWaveformDraw = 0;
 int lastFrame = 0;
 String voiceLabel, captionRole;
 std::vector<String> captionLines;
@@ -89,8 +91,34 @@ uint32_t captionPageMs = 4000;
 std::vector<int> animation;
 struct Lock { Lock() { xSemaphoreTakeRecursive(guard, portMAX_DELAY); }
               ~Lock() { xSemaphoreGiveRecursive(guard); } };
+constexpr int MIC_WAVEFORM_X = 89, MIC_WAVEFORM_Y = 282;
+constexpr int MIC_WAVEFORM_WIDTH = 288, MIC_WAVEFORM_HEIGHT = 86;
+constexpr uint32_t MIC_WAVEFORM_REFRESH_MS = 125;
+
+void drawMicWaveform() {
+  constexpr int columns = 40, stride = 6, halfHeight = 32, inputRange = 4096;
+  constexpr int left = MIC_WAVEFORM_X + 24;
+  constexpr int centerY = MIC_WAVEFORM_Y + MIC_WAVEFORM_HEIGHT / 2;
+  canvas.fillRoundRect(MIC_WAVEFORM_X, MIC_WAVEFORM_Y, MIC_WAVEFORM_WIDTH,
+                       MIC_WAVEFORM_HEIGHT, 14, TFT_BLACK);
+  canvas.drawFastHLine(left, centerY, columns * stride, TFT_DARKGREY);
+  // micCount advances only after the microphone finishes writing the block.
+  const size_t completeColumns = std::min(micCount / MIC_BLOCK_SAMPLES, size_t(columns));
+  for (size_t i = 0; i < completeColumns; ++i) {
+    const auto* start = micSamples + micCount - (completeColumns - i) * MIC_BLOCK_SAMPLES;
+    const auto extrema = std::minmax_element(start, start + MIC_BLOCK_SAMPLES);
+    const int peak = std::clamp(int(*extrema.second), -inputRange, inputRange);
+    const int trough = std::clamp(int(*extrema.first), -inputRange, inputRange);
+    const int top = centerY - peak * halfHeight / inputRange;
+    const int bottom = centerY - trough * halfHeight / inputRange;
+    const int x = left + (columns - completeColumns + i) * stride;
+    canvas.drawFastVLine(x, top, bottom - top + 1, TFT_CYAN);
+  }
+}
+
 // Compose every screen upright, then rotate the complete frame once.
-void presentCanvas() {
+void presentCanvas(bool waveformOnly = false) {
+  if (micRecording) drawMicWaveform();
   if (screenRotation.active) {
     canvas.fillRoundRect(123, 175, 220, 48, 12, TFT_BLACK);
     canvas.setFont(&fonts::lgfxJapanGothic_24);
@@ -101,6 +129,11 @@ void presentCanvas() {
     screenCanvas.fillScreen(TFT_BLACK);
     canvas.pushRotateZoom(&screenCanvas, 233, 233, screenRotation.angle, 1.0f, 1.0f);
     screenCanvas.pushSprite(0, 0);
+  } else if (waveformOnly && !screenRotation.active) {
+    M5.Display.setClipRect(MIC_WAVEFORM_X, MIC_WAVEFORM_Y,
+                           MIC_WAVEFORM_WIDTH, MIC_WAVEFORM_HEIGHT);
+    canvas.pushSprite(0, 0);
+    M5.Display.clearClipRect();
   } else {
     canvas.pushSprite(0, 0);
   }
@@ -197,7 +230,8 @@ void stopAudio() {
 void micLabel(const char* text) {
   Lock lock;
   voiceLabel = text;
-  showFrame(lastFrame);
+  if (dashboardView) drawDashboard();
+  else showFrame(lastFrame);
 }
 void microphone(void*) {
   for (;;) {
@@ -210,6 +244,7 @@ void microphone(void*) {
     { Lock lock;
       micReady = false; micCount = 0; micError = "";
       micFinish = false; micCancel = false; micRecording = true;
+      nextMicWaveformDraw = millis() + MIC_WAVEFORM_REFRESH_MS;
     }
     micLabel("A: 送信 B: 停止");
     bool ok = micSamples && M5.Mic.begin();
@@ -992,6 +1027,11 @@ void loop() {
   }
   {
     Lock lock;
+    if (micRecording && canvasReady && (faceShown || dashboardView) &&
+        int32_t(millis() - nextMicWaveformDraw) >= 0) {
+      presentCanvas(true);
+      nextMicWaveformDraw = millis() + MIC_WAVEFORM_REFRESH_MS;
+    }
     if ((captionPage + 1) * 2 < captionLines.size() && int32_t(millis() - nextCaption) >= 0) {
       ++captionPage; nextCaption = millis() + captionPageMs; showFrame(lastFrame);
     }

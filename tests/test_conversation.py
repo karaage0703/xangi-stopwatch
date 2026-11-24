@@ -364,6 +364,62 @@ def test_commentary_and_final_answer_are_both_spoken_once(monkeypatch, frames):
     ]
 
 
+def test_final_answer_only_queues_the_unspoken_tail(monkeypatch):
+    conversation, output, voice, status = setup()
+    service = Services({}, "http://localhost:18888")
+    service.session_id = "test"
+    stream = (
+        'event: text\ndata: {"fullText":"探してみます。"}\n\n'
+        'event: text\ndata: {"fullText":"探してみます。\\n\\n江戸では。続きです"}\n\n'
+        'event: done\ndata: {"response":"江戸では。続きです"}\n\n'
+    )
+    monkeypatch.setattr(service, "request", lambda *args: io.BytesIO(stream.encode()))
+    monkeypatch.setattr(voice, "reply_chunks", service.reply_chunks)
+    spoken = []
+    synthesize = voice.synthesize
+
+    def track_synthesis(text):
+        spoken.append(text)
+        return synthesize(text)
+
+    monkeypatch.setattr(voice, "synthesize", track_synthesis)
+    monkeypatch.setattr("xangi_stopwatch.conversation.POLL_SECONDS", 0.01)
+    conversation._process(status)
+
+    assert conversation.error is None
+    assert spoken == ["探してみます。", "江戸では。", "続きです"]
+    assert output.actions.count("enqueue") == len(spoken)
+
+
+def test_removing_suggestion_fragment_does_not_replay_the_answer(monkeypatch):
+    import json
+
+    service = Services({}, "http://localhost:18888")
+    service.session_id = "test"
+    answer = "りんごは赤いです。果汁が多いです。秋に実ります。"
+    frames = [
+        ("text", answer),
+        ("text", answer + "\n\n<"),
+        ("text", answer + "\n\n<xangi"),
+        ("text", answer),
+        ("text", answer),
+        ("done", answer),
+    ]
+    payload = "".join(
+        f"event: {event}\ndata: "
+        + json.dumps({"response" if event == "done" else "fullText": text})
+        + "\n\n"
+        for event, text in frames
+    )
+    monkeypatch.setattr(service, "request", lambda *args: io.BytesIO(payload.encode()))
+
+    assert list(service.reply_chunks("果物の特徴")) == [
+        "りんごは赤いです。",
+        "果汁が多いです。",
+        "秋に実ります。",
+    ]
+
+
 def test_answer_caption_starts_after_audio_upload():
     c, output, _, status = setup()
     c.caption_supported = True
