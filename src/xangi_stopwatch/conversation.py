@@ -101,6 +101,7 @@ class Services:
             self.session_id = self.json("/api/sessions", payload)["sessionId"]
         body = json.dumps({"appSessionId": self.session_id, "message": text}).encode()
         event = ""
+        streamed = ""
         emitted = ""
         with self.request(self.host_url + "/api/chat", body) as response:
             for raw in response:
@@ -121,13 +122,20 @@ class Services:
                             if event == "done":
                                 return
                             continue
-                        if not full.startswith(emitted):
-                            # Some runners replace a commentary message with the
-                            # final answer. Others stream both but return only the
-                            # final answer in done. Neither is a transport error.
+                        if event == "done" and streamed.endswith(full):
+                            # The final answer can omit commentary from the stream.
+                            # Keep the spoken prefix within the answer, even when
+                            # its final chunk has not been synthesized yet.
+                            emitted = emitted[len(streamed) - len(full) :]
+                        elif not full.startswith(emitted):
                             if event == "done" and emitted.endswith(full):
                                 return
-                            emitted = ""
+                            # Removing an internal suggestion block can also
+                            # remove newlines that were never sent to TTS.
+                            spoken = emitted.rstrip()
+                            emitted = spoken if full.startswith(spoken) else ""
+                        if event == "text":
+                            streamed = full
                         pending = full[len(emitted) :]
                         while pending:
                             boundary = re.search(r"[。！？!?\n]", pending)
